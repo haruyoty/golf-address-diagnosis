@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ゴルフ診断ツール - テスト版</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 16px;
+        }
+        
+        .button:hover {
+            background: #0056b3;
+        }
+        
+        .button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .file-input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        
+        #imageContainer {
+            position: relative;
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        #uploadedImage {
+            max-width: 100%;
+            height: auto;
+            border-radius: 5px;
+        }
+        
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+            pointer-events: auto;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.warning { background: #fff3cd; color: #856404; }
+        
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>🏌️ ゴルフアドレス診断ツール</h1>
+    
+    <div class="section">
+        <h2>1. 画像をアップロード</h2>
+        <input type="file" id="fileInput" class="file-input" accept="image/*">
+        <div id="status" class="status info">画像を選択してください</div>
+        
+        <div id="imageContainer">
+            <img id="uploadedImage" alt="アップロード画像">
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>2. 設定</h2>
+        <label for="clubSelect">クラブ:</label>
+        <select id="clubSelect">
+            <option value="driver">ドライバー</option>
+            <option value="iron" selected>アイアン</option>
+            <option value="wedge">ウェッジ</option>
+        </select>
+        
+        <br><br>
+        <button id="diagnoseBtn" class="button" disabled>診断開始</button>
+    </div>
+    
+    <div id="results" class="section hidden">
+        <h2>3. 診断結果</h2>
+        <div id="resultContent">結果がここに表示されます</div>
+    </div>
+
+    <script>
+        // グローバル変数
+        let currentImage = null;
+        let ballPosition = null;
+        let canvas = null;
+        let ctx = null;
+        
+        // 初期化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('初期化開始');
+            
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            
+            // ファイル入力イベント
+            document.getElementById('fileInput').addEventListener('change', function(event) {
+                console.log('ファイル選択イベント');
+                handleFileUpload(event);
+            });
+            
+            // キャンバスクリックイベント
+            canvas.addEventListener('click', function(event) {
+                console.log('キャンバスクリック');
+                handleCanvasClick(event);
+            });
+            
+            // 診断ボタン
+            document.getElementById('diagnoseBtn').addEventListener('click', function() {
+                console.log('診断ボタンクリック');
+                runDiagnosis();
+            });
+            
+            updateStatus('準備完了 - 画像を選択してください', 'info');
+        });
+        
+        // ファイルアップロード処理
+        function handleFileUpload(event) {
+            console.log('ファイルアップロード処理開始');
+            
+            const file = event.target.files[0];
+            if (!file) {
+                console.log('ファイルなし');
+                return;
+            }
+            
+            if (!file.type.startsWith('image/')) {
+                updateStatus('画像ファイルを選択してください', 'warning');
+                return;
+            }
+            
+            console.log('画像ファイル:', file.name, file.type);
+            updateStatus('画像を読み込み中...', 'info');
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                console.log('FileReader完了');
+                loadImageToCanvas(e.target.result);
+            };
+            reader.onerror = function() {
+                console.error('FileReaderエラー');
+                updateStatus('ファイル読み込みエラー', 'warning');
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        // 画像をキャンバスに読み込み
+        function loadImageToCanvas(imageSrc) {
+            console.log('画像をキャンバスに読み込み開始');
+            
+            const img = document.getElementById('uploadedImage');
+            
+            img.onload = function() {
+                console.log('画像ロード完了:', img.naturalWidth, 'x', img.naturalHeight);
+                
+                currentImage = img;
+                
+                // コンテナ表示
+                document.getElementById('imageContainer').style.display = 'block';
+                
+                // キャンバス設定
+                setTimeout(function() {
+                    setupCanvas();
+                }, 100);
+                
+                updateStatus('✅ 画像読み込み完了！ボール位置をクリックしてください', 'success');
+            };
+            
+            img.onerror = function() {
+                console.error('画像ロードエラー');
+                updateStatus('画像表示エラー', 'warning');
+            };
+            
+            img.src = imageSrc;
+        }
+        
+        // キャンバス設定
+        function setupCanvas() {
+            console.log('キャンバス設定開始');
+            
+            if (!currentImage) {
+                console.error('currentImageがない');
+                return;
+            }
+            
+            const img = currentImage;
+            const container = document.getElementById('imageContainer');
+            
+            // 画像の実際の表示サイズを取得
+            const imgRect = img.getBoundingClientRect();
+            const displayWidth = img.offsetWidth;
+            const displayHeight = img.offsetHeight;
+            
+            console.log('画像表示サイズ:', displayWidth, 'x', displayHeight);
+            
+            if (displayWidth === 0 || displayHeight === 0) {
+                console.warn('画像サイズが0 - 再試行');
+                setTimeout(setupCanvas, 200);
+                return;
+            }
+            
+            // キャンバス設定
+            canvas.width = displayWidth;
+            canvas.height = displayHeight;
+            canvas.style.position = 'absolute';
+            canvas.style.top = '0';
+            canvas.style.left = '0';
+            canvas.style.width = displayWidth + 'px';
+            canvas.style.height = displayHeight + 'px';
+            
+            // コンテナを相対位置に
+            container.style.position = 'relative';
+            container.style.display = 'inline-block';
+            
+            // 初期描画
+            drawGuide();
+            
+            console.log('キャンバス設定完了:', canvas.width, 'x', canvas.height);
+        }
+        
+        // ガイド描画
+        function drawGuide() {
+            if (!ctx) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 半透明背景
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // ガイドメッセージ
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillRect(10, 10, canvas.width - 20, 50);
+            
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('ボール位置をクリック', canvas.width / 2, 35);
+            ctx.font = '14px Arial';
+            ctx.fillText('足元のボールの位置をクリックしてください', canvas.width / 2, 50);
+        }
+        
+        // キャンバスクリック処理
+        function handleCanvasClick(event) {
+            console.log('キャンバスクリック処理');
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            
+            console.log('クリック座標:', x, y, '/', rect.width, rect.height);
+            
+            // 範囲チェック
+            if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+                updateStatus('画像の範囲内をクリックしてください', 'warning');
+                return;
+            }
+            
+            // ボール位置保存
+            ballPosition = {
+                x: x / rect.width,
+                y: y / rect.height
+            };
+            
+            console.log('ボール位置保存:', ballPosition);
+            
+            // マーカー描画
+            drawBallMarker(x, y);
+            
+            // 診断ボタン有効化
+            document.getElementById('diagnoseBtn').disabled = false;
+            updateStatus('✅ ボール位置設定完了！診断ボタンを押してください', 'success');
+        }
+        
+        // ボールマーカー描画
+        function drawBallMarker(x, y) {
+            console.log('ボールマーカー描画:', x, y);
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 背景
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // マーカー
+            const radius = 15;
+            
+            // 外側円
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y, radius + 3, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 内側円
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 境界線
+            ctx.strokeStyle = '#FF6600';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // ラベル
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('BALL', x, y - 20);
+        }
+        
+        // 診断実行
+        function runDiagnosis() {
+            console.log('診断実行開始');
+            
+            if (!ballPosition) {
+                updateStatus('ボール位置を設定してください', 'warning');
+                return;
+            }
+            
+            const clubType = document.getElementById('clubSelect').value;
+            console.log('診断設定:', clubType, ballPosition);
+            
+            updateStatus('診断中...', 'info');
+            
+            // 診断計算（簡単な例）
+            const result = calculateResult(ballPosition.x, clubType);
+            
+            // 結果表示
+            displayResult(result);
+            
+            updateStatus('✅ 診断完了！', 'success');
+        }
+        
+        // 結果計算
+        function calculateResult(ballX, clubType) {
+            const idealPositions = {
+                'driver': 0.35,
+                'iron': 0.5,
+                'wedge': 0.6
+            };
+            
+            const ideal = idealPositions[clubType] || 0.5;
+            const deviation = Math.abs(ballX - ideal);
+            
+            let score = 100 - Math.round(deviation * 200);
+            score = Math.max(50, Math.min(100, score)); // 50-100の範囲
+            
+            let advice = '';
+            if (ballX < ideal - 0.05) {
+                advice = 'ボール位置が左寄りです。もう少し右足寄りに調整してください。';
+            } else if (ballX > ideal + 0.05) {
+                advice = 'ボール位置が右寄りです。もう少し左足寄りに調整してください。';
+            } else {
+                advice = '良好なボール位置です！この位置をキープしてください。';
+            }
+            
+            return {
+                score: score,
+                advice: advice,
+                clubType: clubType
+            };
+        }
+        
+        // 結果表示
+        function displayResult(result) {
+            console.log('結果表示:', result);
+            
+            const content = `
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="font-size: 2em; font-weight: bold; color: #007bff;">${result.score}点</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                    <h4>💡 アドバイス</h4>
+                    <p>${result.advice}</p>
+                    <p style="margin-top: 10px; font-size: 14px; color: #666;">
+                        <strong>使用クラブ:</strong> ${getClubName(result.clubType)}
+                    </p>
+                </div>
+            `;
+            
+            document.getElementById('resultContent').innerHTML = content;
+            document.getElementById('results').classList.remove('hidden');
+        }
+        
+        // クラブ名取得
+        function getClubName(clubType) {
+            const names = {
+                'driver': 'ドライバー',
+                'iron': 'アイアン',
+                'wedge': 'ウェッジ'
+            };
+            return names[clubType] || clubType;
+        }
+        
+        // ステータス更新
+        function updateStatus(message, type) {
+            console.log('ステータス更新:', message, type);
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + type;
+        }
+        
+        // デバッグ情報
+        console.log('スクリプト読み込み完了');
+        console.log('デバイス:', /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? 'モバイル' : 'PC');
+    </script>
+</body>
+</html>
