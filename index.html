@@ -11,14 +11,72 @@
         window.dataLayer = window.dataLayer || [];
         function gtag(){dataLayer.push(arguments);}
         gtag('js', new Date());
-        gtag('config', 'G-J7QD0MNVWG');
+        // IP匿名化を有効化（プライバシー配慮）
+        gtag('config', 'G-J7QD0MNVWG', { 'anonymize_ip': true });
     </script>
     
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+    <!-- 固定CDN（仕様書準拠） -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466129/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
+    <!-- WASMバックエンドを登録（フォールバック用） -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.21.0"></script>
+    <script>
+      (async () => {
+        try { await tf.setBackend('webgl'); } catch {}
+        try { await tf.ready(); }
+        catch { await tf.setBackend('wasm'); await tf.ready(); }
+        console.log('backend=', tf.getBackend());
+      })();
+      // SAFE_MODE（軽量モード）
+      const SAFE_MODE = true;
+      // モバイル判定
+      const IS_MOBILE = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (window.innerWidth < 768);
+
+      // 端末の最大テクスチャサイズを取得（失敗時は4096）
+      function getMaxTextureSize(){
+        try{
+          const c = document.createElement('canvas');
+          const gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+          const size = gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 4096;
+          return (typeof size === 'number' && size > 0) ? size : 4096;
+        }catch(_){ return 4096; }
+      }
+
+      // 画像を安全サイズに縮小してCanvasを返す（同期）
+      function scaleToMax720(img){
+        const srcW = img.naturalWidth || img.width || 0;
+        const srcH = img.naturalHeight || img.height || 0;
+        if(!srcW || !srcH) return img; // 未読み込み時はそのまま返す
+
+        const maxTex = Math.max(512, Math.min(4096, getMaxTextureSize()));
+        // モバイルはさらに低め（512）に抑制、PCは720まで許容
+        const targetLong = Math.min(720, maxTex - 8, IS_MOBILE ? 512 : 720);
+
+        const longSide = Math.max(srcW, srcH);
+        const s = Math.min(1, targetLong / longSide);
+        // パワーオブツーに丸め（WebGL互換性向上）
+        const roundPOT = (n) => {
+          let p = 1; while(p < n) p <<= 1; return p; // 次の2の累乗
+        };
+        let w = Math.max(1, Math.round(srcW * s));
+        let h = Math.max(1, Math.round(srcH * s));
+        // 端末の制約を超えないよう再丸め
+        w = Math.min(w, maxTex - 8); h = Math.min(h, maxTex - 8);
+        // 一部端末でのNPOT問題回避のためPOTへ（過度な劣化を避けつつ）
+        if(IS_MOBILE){ w = Math.max(1, Math.min(roundPOT(w), maxTex - 8)); h = Math.max(1, Math.min(roundPOT(h), maxTex - 8)); }
+
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(img, 0, 0, w, h);
+        console.log('[scaleToMax720]', {srcW, srcH, maxTex, IS_MOBILE, targetLong, outW:w, outH:h});
+        return c;
+      }
+    </script>
     
     <style>
         * {
@@ -407,15 +465,31 @@
             flex-wrap: wrap;
             gap: 10px;
         }
+
+        /* 右下のプライバシーポリシーリンク */
+        .policy-link {
+            position: fixed;
+            right: 12px;
+            bottom: 12px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-decoration: none;
+            z-index: 10000;
+        }
+        .policy-link:hover { background: rgba(0, 0, 0, 0.75); }
     </style>
 </head>
 <body>
+    <a class="policy-link" href="privacy-policy.html" target="_blank" rel="noopener">プライバシーポリシー</a>
     <div class="container">
         <div class="header">
             <div style="background: rgba(255, 255, 255, 0.15); border-radius: 15px; padding: 20px; margin-bottom: 20px; backdrop-filter: blur(10px);">
                 <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
                     <a href="https://noyamagolf.com/" target="_blank" style="display: block;">
-                        <img src="./noyama-keiji .png" alt="野山佳治プロ" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid white; object-fit: cover; cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="./noyama-keiji.png" alt="野山佳治プロ" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid white; object-fit: cover; cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
                     </a>
                     <div style="text-align: center;">
                         <div style="font-size: 1.2em; font-weight: bold; color: #FFD700;">ティーチングプロ</div>
@@ -483,6 +557,9 @@
                     <div class="radar-container">
                         <canvas id="radarChart"></canvas>
                     </div>
+                    <!-- 総合スコアと詳細コメント（フォールバック用に追加） -->
+                    <div id="overallScore" style="margin-top:12px; font-weight:700; color:#333;"></div>
+                    <div id="analysisDetails" style="margin-top:8px;"></div>
                 </div>
             </div>
 
@@ -512,7 +589,7 @@
                 <h2 style="color: #667eea; font-size: 2.5em; margin-bottom: 15px;">🏌️ レッスンのご案内</h2>
                 <div style="display: flex; align-items: center; justify-content: center; gap: 30px; flex-wrap: wrap;">
                     <a href="https://noyamagolf.com/" target="_blank" style="display: block;">
-                        <img src="./noyama-keiji .png" alt="野山佳治プロ" style="width: 150px; height: 150px; border-radius: 50%; border: 5px solid #667eea; object-fit: cover; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="./noyama-keiji.png" alt="野山佳治プロ" style="width: 150px; height: 150px; border-radius: 50%; border: 5px solid #667eea; object-fit: cover; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
                     </a>
                     <div style="text-align: left; max-width: 500px;">
                         <a href="https://noyamagolf.com/" target="_blank" style="text-decoration: none; color: #333; transition: color 0.2s ease;" onmouseover="this.style.color='#667eea'" onmouseout="this.style.color='#333'">
@@ -633,11 +710,18 @@
                         setTimeout(() => {
                             const viewType = document.getElementById('viewSelect').value;
                             console.log(`MediaPipe姿勢分析開始... 視点: ${viewType}`);
-                            pose.send({image: img}).then(() => {
-                                console.log(`MediaPipe処理完了 - 視点: ${viewType}`);
-                            }).catch(error => {
-                                console.error('MediaPipe処理エラー:', error);
-                            });
+                            try{
+                                const input = scaleToMax720(img);
+                                pose.send({image: input}).then(() => {
+                                    console.log(`MediaPipe処理完了 - 視点: ${viewType}`);
+                                }).catch(error => {
+                                    console.error('MediaPipe処理エラー:', error);
+                                    alert('診断でエラー: ' + (error && error.message ? error.message : error));
+                                });
+                            }catch(e){
+                                console.error('MediaPipe処理エラー:', e);
+                                alert('診断でエラー: ' + (e && e.message ? e.message : e));
+                            }
                         }, 200);
                     } else {
                         console.warn('MediaPipe未準備 - スキップ');
@@ -647,6 +731,55 @@
                 };
             };
             reader.readAsDataURL(file);
+        }
+
+        // ネイティブ（Androidなど）からの取り込み用: DataURLを直接受け取って表示・処理
+        function loadCapturedImage(dataUrl) {
+            try {
+                console.log('ネイティブから画像を受信（dataURL長さ）:', (dataUrl ? dataUrl.length : 0));
+                const img = document.getElementById('uploadedImage');
+                img.src = dataUrl;
+
+                img.onload = function() {
+                    uploadedImage = img;
+                    ballPosition = null;
+                    currentResults = null;
+                    console.log('✅ 画像読み込み完了（ネイティブ連携）');
+
+                    // 結果セクションを表示
+                    document.getElementById('analysisResults').classList.remove('hidden');
+
+                    // キャンバス設定
+                    setupCanvas();
+
+                    // MediaPipe処理を実行（すべての撮影視点で）
+                    if (mediaPipeReady && pose) {
+                        setTimeout(() => {
+                            const viewType = document.getElementById('viewSelect').value;
+                            console.log(`MediaPipe姿勢分析開始（ネイティブ）... 視点: ${viewType}`);
+                            try{
+                                const input = scaleToMax720(img);
+                                pose.send({ image: input }).then(() => {
+                                    console.log('MediaPipe処理完了（ネイティブ）');
+                                }).catch(error => {
+                                    console.error('MediaPipe処理エラー（ネイティブ）:', error);
+                                    alert('診断でエラー: ' + (error && error.message ? error.message : error));
+                                });
+                            }catch(e){
+                                console.error('MediaPipe処理エラー（ネイティブ）:', e);
+                                alert('診断でエラー: ' + (e && e.message ? e.message : e));
+                            }
+                        }, 200);
+                    } else {
+                        console.warn('MediaPipe未準備 - スキップ（ネイティブ）');
+                    }
+
+                    updateDiagnosisButton();
+                };
+            } catch (e) {
+                console.error('loadCapturedImageエラー:', e);
+                alert('画像の読み込みに失敗しました。');
+            }
         }
 
         // キャンバス設定
@@ -1090,11 +1223,18 @@
                 if (viewType === 'rear' && mediaPipeReady && pose) {
                     setTimeout(() => {
                         console.log('後方撮影：MediaPipe処理を再実行');
-                        pose.send({image: uploadedImage}).then(() => {
-                            console.log('後方撮影：MediaPipe処理完了');
-                        }).catch(error => {
-                            console.error('後方撮影：MediaPipe処理エラー:', error);
-                        });
+                        try{
+                            const input = scaleToMax720(uploadedImage);
+                            pose.send({image: input}).then(() => {
+                              console.log('後方撮影：MediaPipe処理完了');
+                            }).catch(error => {
+                                console.error('後方撮影：MediaPipe処理エラー:', error);
+                                alert('診断でエラー: ' + (error && error.message ? error.message : error));
+                            });
+                        }catch(e){
+                            console.error('後方撮影：MediaPipe処理エラー:', e);
+                            alert('診断でエラー: ' + (e && e.message ? e.message : e));
+                        }
                     }, 300);
                 }
                 
@@ -3000,13 +3140,10 @@ function performDiagnosis() {
                 // モバイルデバイスの検出
                 const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
 
-                // MediaPipeライブラリの読み込み確認
+                // MediaPipeライブラリの読み込み確認（要件緩和: Pose の存在のみ必須）
                 const checkLibraries = () => {
                     try {
-                        return (typeof Pose !== 'undefined' &&
-                                typeof drawConnectors !== 'undefined' &&
-                                typeof drawLandmarks !== 'undefined' &&
-                                typeof POSE_CONNECTIONS !== 'undefined');
+                        return (typeof Pose !== 'undefined');
                     } catch (e) {
                         console.warn('ライブラリ確認エラー:', e);
                         return false;
@@ -3014,7 +3151,7 @@ function performDiagnosis() {
                 };
 
                 // モバイルの場合は待機時間を延長
-                const maxAttempts = isMobile ? 100 : 50; // モバイル10秒、PC5秒
+                const maxAttempts = isMobile ? 150 : 60; // モバイル最大15秒に延長
                 let attempts = 0;
 
                 const checkInterval = setInterval(() => {
@@ -3024,19 +3161,25 @@ function performDiagnosis() {
                         clearInterval(checkInterval);
 
                         try {
-                            pose = new Pose({
-                                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-                            });
+                            // 仕様書準拠: 固定CDNを使用
+                            // Mediapipe Pose のコンストラクタ差異に耐える実装
+                            const PoseNS = (typeof Pose !== 'undefined') ? Pose : undefined;
+                            if(!PoseNS) throw new Error('Pose namespace not found');
+                            if (typeof PoseNS.Pose === 'function') {
+                                pose = new PoseNS.Pose({
+                                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+                                });
+                            } else if (typeof PoseNS === 'function') {
+                                pose = new PoseNS({
+                                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+                                });
+                            } else {
+                                throw new Error('Pose constructor not found');
+                            }
 
-                            // モバイル用の軽量設定
-                            const options = isMobile ? {
-                                modelComplexity: 0, // モバイルは軽量モデル
-                                smoothLandmarks: false, // スムージング無効
-                                enableSegmentation: false, // セグメンテーション無効
-                                minDetectionConfidence: 0.7, // 検出閾値高め
-                                minTrackingConfidence: 0.7
-                            } : {
-                                modelComplexity: 1,
+                            // SAFE_MODEで軽量/通常切替
+                            const options = {
+                                modelComplexity: SAFE_MODE ? 0 : 1,
                                 smoothLandmarks: true,
                                 minDetectionConfidence: 0.5,
                                 minTrackingConfidence: 0.5
