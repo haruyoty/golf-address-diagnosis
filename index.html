@@ -1531,20 +1531,24 @@ function performDiagnosis() {
                 
                 const stanceWidth = Math.abs(rightAnkle.x - leftAnkle.x);
                 const shoulderWidth = Math.abs(rightShoulder.x - leftShoulder.x);
-                const ratio = stanceWidth / shoulderWidth;
+                const ratio = shoulderWidth > 0 ? (stanceWidth / shoulderWidth) : 0;
                 
                 const selectedClub = document.getElementById('clubSelect').value;
                 const idealRatio = getIdealStanceRatio(selectedClub);
                 const ratioDiff = Math.abs(ratio - idealRatio);
                 
                 // 詳細データを保存
+                const tol = 0.10; // 許容幅（±10%）
+                const heuristicWide = 1.15; // 肩幅の1.15倍超なら広い判定を優先
+                const heuristicNarrow = 0.85; // 肩幅の0.85倍未満なら狭い判定を優先
+
                 detailedAnalysisData.stance = {
                     currentRatio: ratio,
                     idealRatio: idealRatio,
                     difference: ratio - idealRatio,
                     club: selectedClub,
-                    isTooWide: ratio > idealRatio,
-                    isTooNarrow: ratio < idealRatio,
+                    isTooWide: (ratio > idealRatio + tol) || (ratio > heuristicWide),
+                    isTooNarrow: (ratio < idealRatio - tol) && (ratio < heuristicNarrow),
                     stanceWidthPercent: Math.round(stanceWidth * 100),
                     shoulderWidthPercent: Math.round(shoulderWidth * 100)
                 };
@@ -1557,9 +1561,9 @@ function performDiagnosis() {
                     shoulderWidth: Math.round(shoulderWidth * 100) + '%'
                 });
                 
-                if (ratioDiff < 0.05) return 92;
-                if (ratioDiff < 0.1) return 85;
-                if (ratioDiff < 0.15) return 75;
+                if (ratioDiff < 0.08) return 92;
+                if (ratioDiff < 0.15) return 85;
+                if (ratioDiff < 0.22) return 75;
                 return 68;
                 
             } catch (error) {
@@ -1642,22 +1646,17 @@ function performDiagnosis() {
                     'クラブ': selectedClub
                 });
                 
-                // プレーヤー視点で右すぎる場合（右腰の前など）は段階的に厳しく評価
-                if (handDiff < -0.10) return 15; // プレーヤー視点で大きく右すぎる場合（右腰の前）
-                if (handDiff < -0.06) return 25; // プレーヤー視点で右すぎる場合
-                if (handDiff < -0.03) return 40; // プレーヤー視点でやや右すぎる場合
-                
-                // プレーヤー視点で左すぎる場合も段階的に評価
-                if (handDiff > 0.15) return 20; // プレーヤー視点で大きく左すぎる場合
-                if (handDiff > 0.10) return 30; // プレーヤー視点で左すぎる場合
-                if (handDiff > 0.06) return 45; // プレーヤー視点でやや左すぎる場合
-                
-                // 左内ももあたり（理想的な位置）は高得点 - より寛容な基準
-                if (Math.abs(handDiff) < 0.015) return 98; // 非常に理想的
-                if (Math.abs(handDiff) < 0.03) return 95;  // 理想的
-                if (Math.abs(handDiff) < 0.05) return 88;  // 良好
-                if (Math.abs(handDiff) < 0.07) return 80;  // まあまあ
-                return 60;
+                // 大きな外れのみ方向で厳しく評価（極端な位置）
+                if (handDiff < -0.12 || handDiff > 0.15) return 20;
+
+                // 左右方向に関わらず、ずれ量で評価（寛容化）
+                const absDiff = Math.abs(handDiff);
+                if (absDiff < 0.015) return 98; // 非常に理想的
+                if (absDiff < 0.03)  return 95; // 理想的
+                if (absDiff < 0.05)  return 92; // 良好（5%ずれでも高得点）
+                if (absDiff < 0.07)  return 88; // まあまあ
+                if (absDiff < 0.10)  return 80; // 許容範囲
+                return 68; // 要改善
                 
             } catch (error) {
                 console.error('MediaPipe手位置分析エラー:', error);
@@ -1667,55 +1666,73 @@ function performDiagnosis() {
 
         function analyzeWeightDistribution(landmarks) {
             try {
-                const leftAnkle = landmarks[28];  // プレーヤーの左足首
-                const rightAnkle = landmarks[27]; // プレーヤーの右足首
+                // MediaPipeのインデックス（被写体基準）
+                // 足元は母指球（foot_index）を優先し、無ければ足首を使用（BlazePose: 31=left_foot_index, 32=right_foot_index, 28=left_ankle, 27=right_ankle）
+                const leftFoot = landmarks[31] || landmarks[28];   // 被写体の左
+                const rightFoot = landmarks[32] || landmarks[27];  // 被写体の右
+                const hipsL = landmarks[23];
+                const hipsR = landmarks[24];
                 const nose = landmarks[0];
-                
-                const stanceCenter = (leftAnkle.x + rightAnkle.x) / 2;
-                const bodyCenter = nose.x;
-                const balance = bodyCenter - stanceCenter; // 正の値：右足重心、負の値：左足重心
-                
+
+                if (!leftFoot || !rightFoot) return 80;
+
+                // 正面の体重配分では頭の位置の方が変化に敏感なため、鼻xを優先。無ければ腰の中点。
+                const bodyCenterX = nose ? nose.x : ((hipsL && hipsR) ? (hipsL.x + hipsR.x) / 2 : 0.5);
+
+                // 正面では水平成分を用いて、被写体の左足→右足方向の比率を算出（t: 0=左, 1=右）
+                const clamp01 = (v) => Math.max(0, Math.min(1, v));
+                // min/maxで正規化し、足の並びに応じて右比率に変換
+                const minX = Math.min(leftFoot.x, rightFoot.x);
+                const maxX = Math.max(leftFoot.x, rightFoot.x);
+                const span = Math.max(1e-6, maxX - minX);
+                const t = clamp01((bodyCenterX - minX) / span); // 画像左→右
+                const rightOnRightSide = rightFoot.x > leftFoot.x;
+
                 const selectedClub = document.getElementById('clubSelect').value;
-                const idealWeightBalance = getIdealWeightBalance(selectedClub);
-                
-                // 理想的な体重配分に基づく理想的な位置計算
-                // 0.5 = 均等、0.6 = 6:4で右足重心
-                let idealBodyPosition;
-                if (idealWeightBalance === 0.6) {
-                    idealBodyPosition = stanceCenter + 0.02; // 右に少しずれた位置
-                } else {
-                    idealBodyPosition = stanceCenter; // 中央
-                }
-                
-                const positionDiff = Math.abs(bodyCenter - idealBodyPosition);
-                
-                // 詳細データを保存（プレーヤー視点で左右を判定）
+                const rightRatio = rightOnRightSide ? t : (1 - t);
+                const leftRatio = 1 - rightRatio;
+                const idealRight = getIdealWeightBalance(selectedClub); // driver=0.6, others=0.5
+                const diff = Math.abs(rightRatio - idealRight);
+
+                // 判定用フラグ（理想からの偏り）
+                const tol = 0.02; // 2%の許容
+                const isRightHeavy = rightRatio > (idealRight + tol);
+                const isLeftHeavy = rightRatio < (idealRight - tol);
+
                 detailedAnalysisData.weight = {
-                    currentBalance: balance,
-                    bodyCenter: bodyCenter,
-                    stanceCenter: stanceCenter,
-                    idealBodyPosition: idealBodyPosition,
-                    idealWeightBalance: idealWeightBalance,
+                    currentBalance: rightRatio - 0.5,
+                    bodyCenter: bodyCenterX,
+                    stanceCenter: (leftFoot.x + rightFoot.x) / 2,
+                    idealBodyPosition: null,
+                    idealWeightBalance: idealRight,
                     club: selectedClub,
-                    isRightHeavy: bodyCenter < idealBodyPosition,  // プレーヤー視点で右足重心
-                    isLeftHeavy: bodyCenter > idealBodyPosition,   // プレーヤー視点で左足重心
-                    difference: bodyCenter - idealBodyPosition
+                    isRightHeavy,
+                    isLeftHeavy,
+                    difference: rightRatio - idealRight,
+                    rightRatio,
+                    leftRatio
                 };
-                
-                console.log('MediaPipe体重配分分析:', {
-                    balance: Math.round(balance * 100) + '%',
-                    bodyCenter: Math.round(bodyCenter * 100) + '%',
-                    stanceCenter: Math.round(stanceCenter * 100) + '%',
-                    idealBodyPosition: Math.round(idealBodyPosition * 100) + '%',
-                    club: selectedClub,
-                    idealBalance: (idealWeightBalance * 100) + '%右足重心'
+
+                console.log('MediaPipe体重配分分析(正面):', {
+                    bodyCenterX: Math.round(bodyCenterX * 100) + '%',
+                    leftFootX: Math.round(leftFoot.x * 100) + '%',
+                    rightFootX: Math.round(rightFoot.x * 100) + '%',
+                    minX: Math.round(minX * 100) + '%',
+                    maxX: Math.round(maxX * 100) + '%',
+                    rightOnRightSide,
+                    tNorm: Math.round(t * 100) + '%',
+                    rightRatio: Math.round(rightRatio * 100) + '%',
+                    leftRatio: Math.round(leftRatio * 100) + '%',
+                    idealRight: Math.round(idealRight * 100) + '%',
+                    club: selectedClub
                 });
-                
-                if (positionDiff < 0.015) return 92;
-                if (positionDiff < 0.03) return 85;
-                if (positionDiff < 0.045) return 75;
+
+                // スコア（理想とのズレで評価）
+                if (diff < 0.02) return 92;  // ±2%
+                if (diff < 0.05) return 85;  // ±5%
+                if (diff < 0.08) return 75;  // ±8%
                 return 68;
-                
+
             } catch (error) {
                 console.error('MediaPipe体重配分分析エラー:', error);
                 return 80;
@@ -1797,19 +1814,20 @@ function performDiagnosis() {
         
         // クラブ別の理想的なスタンス幅比率を取得
         function getIdealStanceRatio(club) {
+            // 表示の理想に合わせて比率も定義
             const ratios = {
-                'driver': 1.2,      // ドライバー: 肩幅より少し広め（約1.2倍）
-                'fairway': 1.0,     // フェアウェイウッド: 肩幅と同じ
-                'utility': 1.0,     // ユーティリティ: 肩幅と同じ
-                'iron4': 1.0,       // 4番アイアン: 肩幅と同じ
-                'iron5': 1.0,       // 5番アイアン: 肩幅と同じ
-                'iron6': 1.0,       // 6番アイアン: 肩幅と同じ
-                'iron7': 1.0,       // 7番アイアン: 肩幅と同じ
-                'iron8': 1.0,       // 8番アイアン: 肩幅と同じ
-                'iron9': 1.0,       // 9番アイアン: 肩幅と同じ
-                'wedge': 1.0        // ウェッジ: 肩幅と同じ
+                'driver': 1.20,     // ドライバー: 肩幅より少し広め（約1.2倍）
+                'fairway': 1.00,    // その他のクラブ: 肩幅が理想
+                'utility': 1.00,
+                'iron4': 1.00,
+                'iron5': 1.00,
+                'iron6': 1.00,
+                'iron7': 1.00,
+                'iron8': 1.00,
+                'iron9': 1.00,
+                'wedge': 1.00
             };
-            return ratios[club] || 1.0; // デフォルトは肩幅と同じ
+            return ratios[club] || 1.00;
         }
         
         // クラブ別の理想的な左右重心配分を取得（右足重心の割合）
@@ -1832,19 +1850,21 @@ function performDiagnosis() {
         
         // クラブ別の理想的な前傾角度を取得（度）
         function getIdealForwardLean(club) {
+            // 正面からの要望に合わせ、後方でも目安角度を更新
+            // ドライバーで30度、短くなるほど徐々に深く、ウェッジで45度
             const angles = {
-                'driver': 15,      // ドライバー: 浅めの前傾
-                'fairway': 18,     // フェアウェイウッド
-                'utility': 20,     // ユーティリティ
-                'iron4': 22,       // 4番アイアン
-                'iron5': 24,       // 5番アイアン
-                'iron6': 26,       // 6番アイアン
-                'iron7': 28,       // 7番アイアン
-                'iron8': 30,       // 8番アイアン
-                'iron9': 32,       // 9番アイアン
-                'wedge': 35        // ウェッジ: 深めの前傾
+                'driver': 30,
+                'fairway': 33,
+                'utility': 35,
+                'iron4': 36,
+                'iron5': 38,
+                'iron6': 39,
+                'iron7': 41,
+                'iron8': 43,
+                'iron9': 44,
+                'wedge': 45
             };
-            return angles[club] || 25;
+            return angles[club] || 38;
         }
         
         // クラブ別の理想的な手の位置を取得（スタンス中心からの相対位置）
@@ -1871,11 +1891,11 @@ function performDiagnosis() {
         
         // クラブ別の理想的な手と体の間隔を取得（後方視点用）
         function getIdealHandBodyDistance(club) {
-            // ドライバーは拳3個分、その他は拳1.5-2個分
+            // ドライバー以外のクラブでは、手は肩の真下
             if (club === 'driver') {
-                return 0.09; // 体幅の9%程度（拳3個分）
+                return 0.08; // 体幅の8%程度（目安）
             } else {
-                return 0.05; // 体幅の5%程度（拳1.5-2個分）
+                return 0.0; // 肩の真下（距離はオフセット0を理想とする）
             }
         }
 
@@ -1886,7 +1906,9 @@ function performDiagnosis() {
                 const rightShoulder = landmarks[11]; // プレーヤーの右肩
                 const leftHip = landmarks[24];       // プレーヤーの左腰
                 const rightHip = landmarks[23];      // プレーヤーの右腰
-                
+                const leftAnkle = landmarks[28];     // 左足首
+                const rightAnkle = landmarks[27];    // 右足首
+
                 const shoulderCenter = {
                     x: (leftShoulder.x + rightShoulder.x) / 2,
                     y: (leftShoulder.y + rightShoulder.y) / 2
@@ -1895,15 +1917,51 @@ function performDiagnosis() {
                     x: (leftHip.x + rightHip.x) / 2,
                     y: (leftHip.y + rightHip.y) / 2
                 };
-                
-                // 前傾角度を計算（垂直からの角度）
-                const deltaY = shoulderCenter.y - hipCenter.y; // 上下の差（肩が腰より上にある）
-                const deltaX = shoulderCenter.x - hipCenter.x; // 前後の差（符号を保持）
-                const angle = Math.atan2(Math.abs(deltaX), Math.abs(deltaY)) * (180 / Math.PI);
-                
+
+                // 推定1: 水平ずれ/垂直長からの角度（深いほど大）
+                const dx = Math.abs(shoulderCenter.x - hipCenter.x);
+                const dy = Math.max(1e-6, Math.abs(shoulderCenter.y - hipCenter.y));
+                const angleVec = Math.atan2(dx, dy) * (180 / Math.PI);
+
+                // 推定2: 肩の落ち量（縦方向）からの擬似角度（10°〜45°）
+                const avgAnkleY = (leftAnkle && rightAnkle)
+                  ? (leftAnkle.y + rightAnkle.y) / 2
+                  : (hipCenter.y + 0.30); // フォールバック
+                const torsoRef = Math.max(0.05, avgAnkleY - hipCenter.y);
+                const dropY = Math.max(0, shoulderCenter.y - hipCenter.y);
+                const dropNorm = Math.max(0, Math.min(1, dropY / torsoRef));
+                // 深いケースの過小評価を避けるため、上限を広げる（〜60°まで）
+                const angleDrop = 15 + 45 * dropNorm; // 15°〜60°
+
+                // 背中（肩→腰）の角度と肩の落下量からの擬似角度を統合
+                // 浅いのに深い/深いのに浅いを避けるため、相互に乖離が大きい場合は信頼できる方を優先
+                let angle = angleVec;
+                {
+                  // 再計算: 肩の落下量ベースの擬似角度（15°〜55°）
+                  const avgAnkleY2 = (leftAnkle && rightAnkle)
+                    ? (leftAnkle.y + rightAnkle.y) / 2
+                    : (hipCenter.y + 0.30);
+                  const torsoRef2 = Math.max(0.05, avgAnkleY2 - hipCenter.y);
+                  const dropY2 = Math.max(0, shoulderCenter.y - hipCenter.y);
+                  const dropNorm2 = Math.max(0, Math.min(1, dropY2 / torsoRef2));
+                  const angleDrop2 = 15 + 40 * dropNorm2; // 15°〜55°
+
+                  const diff = Math.abs(angleVec - angleDrop2);
+                  if (diff > 10) {
+                    // 乖離が大きい場合: 背中角度が小さすぎるのにdropが大→深いときはdropを採用
+                    // 逆にdropが小さすぎるのに背中角度が大→浅いときは背中角度を採用
+                    angle = (angleDrop2 > angleVec) ? angleDrop2 : angleVec;
+                  } else {
+                    // 近い場合は重み付き平均
+                    angle = 0.7 * angleVec + 0.3 * angleDrop2;
+                  }
+                }
+
                 const selectedClub = document.getElementById('clubSelect').value;
                 const idealAngle = getIdealForwardLean(selectedClub);
                 const angleDiff = angle - idealAngle;
+                // 判定用の許容幅（±2.5°以内は適正）
+                const tolDeg = 2.5;
                 
                 // 詳細データを保存
                 detailedAnalysisData.forwardLean = {
@@ -1911,8 +1969,8 @@ function performDiagnosis() {
                     idealAngle: idealAngle,
                     difference: angleDiff,
                     club: selectedClub,
-                    isTooShallow: angle < idealAngle,  // 角度が小さい = 浅すぎる
-                    isTooDeep: angle > idealAngle,     // 角度が大きい = 深すぎる
+                    isTooShallow: angle < (idealAngle - tolDeg),  // 角度が小さい = 浅すぎる
+                    isTooDeep: angle > (idealAngle + tolDeg),     // 角度が大きい = 深すぎる
                     absoluteDifference: Math.abs(angleDiff)
                 };
                 
@@ -1954,23 +2012,20 @@ function performDiagnosis() {
                 
                 const selectedClub = document.getElementById('clubSelect').value;
                 
-                // 肩の真下からの前後位置差を計算
-                const forwardOffset = handCenter.x - shoulderCenter.x;
+                // 肩の真下からの前後位置差（水平成分のみ、肩幅で正規化）
+                const bodyWidth = Math.max(1e-6, Math.abs(rightShoulder.x - leftShoulder.x));
+                const forwardOffsetNorm = (handCenter.x - shoulderCenter.x) / bodyWidth;
                 const idealForwardOffset = getIdealHandPositionFromRear(selectedClub);
-                const positionDiff = Math.abs(forwardOffset - idealForwardOffset);
+                const positionDiff = Math.abs(forwardOffsetNorm - idealForwardOffset);
                 
-                // 手と体の間隔（距離）を計算
-                const bodyWidth = Math.abs(rightShoulder.x - leftShoulder.x);
-                const handBodyDistance = Math.sqrt(
-                    Math.pow(handCenter.x - shoulderCenter.x, 2) + 
-                    Math.pow(handCenter.y - shoulderCenter.y, 2)
-                );
-                const relativeDistance = handBodyDistance / bodyWidth;
+                // 手と体の間隔（水平距離のみ）
+                const horizDist = Math.abs(handCenter.x - shoulderCenter.x);
+                const relativeDistance = horizDist / bodyWidth;
                 const idealDistance = getIdealHandBodyDistance(selectedClub);
                 const distanceDiff = Math.abs(relativeDistance - idealDistance);
                 
                 console.log('MediaPipe手の位置分析（後方）:', {
-                    forwardOffset: Math.round(forwardOffset * 100) + '%',
+                    forwardOffsetNorm: Math.round(forwardOffsetNorm * 100) + '%',
                     idealForwardOffset: Math.round(idealForwardOffset * 100) + '%',
                     handBodyDistance: Math.round(relativeDistance * 100) + '%',
                     idealDistance: Math.round(idealDistance * 100) + '%',
@@ -1981,11 +2036,12 @@ function performDiagnosis() {
                 detailedAnalysisData.handBodyDistance = {
                     currentDistance: relativeDistance,
                     idealDistance: idealDistance,
-                    forwardOffset: forwardOffset,
+                    forwardOffset: forwardOffsetNorm,
                     idealForwardOffset: idealForwardOffset,
                     club: selectedClub,
-                    isTooClose: relativeDistance < (idealDistance - 0.02),
-                    isTooFar: relativeDistance > (idealDistance + 0.02),
+                    // 許容を広めにして誤判定（近いのに遠い等）を軽減（±3%）
+                    isTooClose: relativeDistance < (idealDistance - 0.03),
+                    isTooFar: relativeDistance > (idealDistance + 0.03),
                     positionDiff: positionDiff,
                     distanceDiff: distanceDiff
                 };
@@ -1998,9 +2054,9 @@ function performDiagnosis() {
                 else positionScore = 68;
                 
                 let distanceScore = 50;
-                if (distanceDiff < 0.01) distanceScore = 92;
-                else if (distanceDiff < 0.02) distanceScore = 85;
-                else if (distanceDiff < 0.03) distanceScore = 75;
+                if (distanceDiff < 0.015) distanceScore = 92;
+                else if (distanceDiff < 0.03) distanceScore = 85;
+                else if (distanceDiff < 0.05) distanceScore = 75;
                 else distanceScore = 68;
                 
                 return Math.round((positionScore + distanceScore) / 2);
@@ -2202,9 +2258,10 @@ function performDiagnosis() {
                     curvatureRatio: curvatureRatio,
                     totalForwardLean: totalForwardLean,
                     spineAlignment: spineAlignment,
-                    isTooStraight: curvatureRatio < 0.01, // 真っすぐすぎ
-                    isTooArched: upperSpine > 0 && lowerSpine < 0 && curvatureRatio > 0.05, // 反りすぎ
-                    isTooRounded: upperSpine < 0 && lowerSpine > 0 && curvatureRatio > 0.05 // 丸すぎ
+                    // 基準をやや緩和
+                    isTooStraight: curvatureRatio < 0.008, // 真っすぐすぎをやや緩め
+                    isTooArched: upperSpine > 0 && lowerSpine < 0 && curvatureRatio > 0.08, // 反りすぎの閾値を拡大
+                    isTooRounded: upperSpine < 0 && lowerSpine > 0 && curvatureRatio > 0.08 // 丸すぎの閾値を拡大
                 };
                 
                 console.log('MediaPipe背中の曲がり具合分析:', {
@@ -2213,11 +2270,17 @@ function performDiagnosis() {
                     curvatureRatio: Math.round(curvatureRatio * 100) + '%'
                 });
                 
-                // 理想的な自然な湾曲
-                if (curvatureRatio < 0.02) return 92;
-                if (curvatureRatio < 0.04) return 85;
+                // スコア付け: 明らかな過度（反り/丸まり）でなければ高めに評価
+                const flags = detailedAnalysisData.backCurvature;
+                if (!(flags.isTooArched || flags.isTooRounded)){
+                  if (curvatureRatio < 0.03) return 92;   // 非常に良好
+                  if (curvatureRatio < 0.07) return 85;   // 概ね適切
+                  if (curvatureRatio < 0.10) return 78;   // やや過多
+                  return 70;                               // 改善余地
+                }
+                // 過度に反り/丸まりのときは厳しめ
                 if (curvatureRatio < 0.06) return 75;
-                return 68;
+                return 60;
                 
             } catch (error) {
                 console.error('MediaPipe背中の曲がり具合分析エラー:', error);
@@ -2273,11 +2336,11 @@ function performDiagnosis() {
                 if (data.isLeftTooMuch) {
                     return `<strong>現状：</strong>ボールが左に寄りすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想位置は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>ボールをもう少し右に移動させてください。約${Math.abs(Math.round(data.difference * 100))}%右に調整が必要です。`;
+                           `;
                 } else if (data.isRightTooMuch) {
                     return `<strong>現状：</strong>ボールが右に寄りすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想位置は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>ボールをもう少し左に移動させてください。約${Math.abs(Math.round(data.difference * 100))}%左に調整が必要です。`;
+                           `;
                 }
             }
             
@@ -2298,27 +2361,27 @@ function performDiagnosis() {
                 
                 const clubName = clubNames[data.club] || data.club;
                 const idealDescriptions = {
-                    'driver': '肩幅より少し広い幅（約1.2倍）',
-                    'fairway': '肩幅と同じ程度',
-                    'utility': '肩幅と同じ程度', 
-                    'iron4': '肩幅と同じ程度',
-                    'iron5': '肩幅と同じ程度',
-                    'iron6': '肩幅と同じ程度',
-                    'iron7': '肩幅と同じ程度',
-                    'iron8': '肩幅と同じ程度',
-                    'iron9': '肩幅と同じ程度',
-                    'wedge': '肩幅と同じ程度'
+                    'driver': '肩幅より少し広め（約1.2倍）',
+                    'fairway': '肩幅が理想',
+                    'utility': '肩幅が理想', 
+                    'iron4': '肩幅が理想',
+                    'iron5': '肩幅が理想',
+                    'iron6': '肩幅が理想',
+                    'iron7': '肩幅が理想',
+                    'iron8': '肩幅が理想',
+                    'iron9': '肩幅が理想',
+                    'wedge': '肩幅が理想'
                 };
                 const idealDescription = idealDescriptions[data.club] || '肩幅（ドライバーは約1.2倍）';
                 
                 if (data.isTooWide) {
                     return `<strong>現状：</strong>スタンス幅が広すぎます（現在：肩幅の${data.currentRatio.toFixed(1)}倍）。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>足をもう少し狭めて、機動性を向上させてください。`;
+                           `;
                 } else if (data.isTooNarrow) {
                     return `<strong>現状：</strong>スタンス幅が狭すぎます（現在：肩幅の${data.currentRatio.toFixed(1)}倍）。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>足をもう少し広げて、安定感を向上させてください。`;
+                           `;
                 }
             }
             
@@ -2338,16 +2401,16 @@ function performDiagnosis() {
                 };
                 
                 const clubName = clubNames[data.club] || data.club;
-                const idealDescription = data.club === 'driver' ? '6:4で右足重心' : '左右均等（5:5）';
+                const idealDescription = data.club === 'driver' ? '正面からの時、右足に6割・左足に4割' : '左右均等';
                 
                 if (data.isRightHeavy) {
                     return `<strong>現状：</strong>右足に体重がかかりすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>左足により体重をかけてバランスを取ってください。`;
+                           `;
                 } else if (data.isLeftHeavy) {
                     return `<strong>現状：</strong>左足に体重がかかりすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>右足により体重をかけてバランスを取ってください。`;
+                           `;
                 }
             }
             
@@ -2372,11 +2435,11 @@ function performDiagnosis() {
                 if (data.isLeftTooMuch) {
                     return `<strong>現状：</strong>頭が左に寄りすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>頭をもう少し右に移動させてください。`;
+                           `;
                 } else if (data.isRightTooMuch) {
                     return `<strong>現状：</strong>頭が右に寄りすぎています。<br>
                            <strong>理想：</strong>${clubName}の理想は${idealDescription}です。<br>
-                           <strong>改善方法：</strong>頭をもう少し左に移動させてください。`;
+                           `;
                 }
             }
             
@@ -2385,11 +2448,11 @@ function performDiagnosis() {
                 if (data.isLeftTooMuch) {
                     return `<strong>現状：</strong>手が左に寄りすぎています。<br>
                            <strong>理想：</strong>左内ももあたりが理想です。<br>
-                           <strong>改善方法：</strong>手をもう少し右に移動させてください。`;
+                           `;
                 } else if (data.isRightTooMuch) {
                     return `<strong>現状：</strong>手が右に寄りすぎています。<br>
                            <strong>理想：</strong>左内ももあたりが理想です。<br>
-                           <strong>改善方法：</strong>手をもう少し左に移動させてください。`;
+                           `;
                 }
             }
             
@@ -2413,11 +2476,11 @@ function performDiagnosis() {
                 if (data.isTooShallow) {
                     return `<strong>現状：</strong>前傾角度が浅すぎます。<br>
                            <strong>理想：</strong>${clubName}では適度な前傾角度が必要です。<br>
-                           <strong>改善方法：</strong>股関節からもう少し深く前傾してください。`;
+                           `;
                 } else if (data.isTooDeep) {
                     return `<strong>現状：</strong>前傾角度が深すぎます。<br>
                            <strong>理想：</strong>${clubName}では適度な前傾角度を保つことが大切です。<br>
-                           <strong>改善方法：</strong>もう少し上体を起こしてください。`;
+                           `;
                 }
             }
             
@@ -2443,20 +2506,20 @@ function performDiagnosis() {
                 if (data.isTooClose) {
                     return `<strong>現状：</strong>手が体に近すぎて窮屈な構えになっています。<br>
                            <strong>理想：</strong>${clubName}の手は${positionIdeal}で、体との間隔は${distanceIdeal}です。<br>
-                           <strong>改善方法：</strong>もう少し手を体から離し、腕に余裕を持たせてください。`;
+                           `;
                 } else if (data.isTooFar) {
                     return `<strong>現状：</strong>手が体から離れすぎて不安定な構えになっています。<br>
                            <strong>理想：</strong>${clubName}の手は${positionIdeal}で、体との間隔は${distanceIdeal}です。<br>
-                           <strong>改善方法：</strong>手をもう少し体に近づけて、安定した構えを作ってください。`;
+                           `;
                 } else if (data.forwardOffset && Math.abs(data.forwardOffset) > 0.02) {
                     const offsetDesc = data.forwardOffset > 0 ? '前に出すぎ' : '後ろに下がりすぎ';
                     return `<strong>現状：</strong>手の前後位置がずれています（肩から${offsetDesc}）。<br>
                            <strong>理想：</strong>${clubName}の手は${positionIdeal}が理想です。<br>
-                           <strong>改善方法：</strong>手の位置を${data.forwardOffset > 0 ? '少し後ろに' : '少し前に'}移動させてください。`;
+                           `;
                 } else {
                     return `<strong>現状：</strong>手と体の距離バランスが不適切です。<br>
                            <strong>理想：</strong>体との間隔は${distanceIdeal}が理想です。<br>
-                           <strong>改善方法：</strong>手と体の適切な距離を意識してください。`;
+                           `;
                 }
             }
             
@@ -2464,16 +2527,16 @@ function performDiagnosis() {
             if (analysisKey === 'frontBackBalance') {
                 if (data.isTooForward) {
                     return `<strong>現状：</strong>肩の位置が母指球より前に出ています（つま先寄り）。<br>
-                           <strong>理想：</strong>肩の位置の真下〜わずかにつま先寄りに母指球が来るのが理想です。<br>
-                           <strong>改善方法：</strong>わずかに重心を後ろ（かかと側）へ調整し、肩の真下に母指球がくるように整えましょう。`;
+                           <strong>理想：</strong>前後のバランスは、センターもしくはややつま先寄りが理想です。<br>
+                           `;
                 } else if (data.isTooBackward) {
                     return `<strong>現状：</strong>肩の位置が母指球より後ろにあります（かかと寄り）。<br>
-                           <strong>理想：</strong>肩の位置の真下〜わずかにつま先寄りに母指球が来るのが理想です。<br>
-                           <strong>改善方法：</strong>わずかに重心を前（つま先側）へ調整し、肩の真下に母指球がくるように整えましょう。`;
+                           <strong>理想：</strong>前後のバランスは、センターもしくはややつま先寄りが理想です。<br>
+                           `;
                 } else {
                     return `<strong>現状：</strong>概ね適切です。<br>
-                           <strong>理想：</strong>肩の位置の真下〜わずかにつま先寄りに母指球が来ている状態を維持しましょう。<br>
-                           <strong>改善方法：</strong>そのままの前後バランスをキープしてください。`;
+                           <strong>理想：</strong>前後のバランスは、センターもしくはややつま先寄りが理想です。<br>
+                           `;
                 }
             }
             
@@ -2487,11 +2550,11 @@ function performDiagnosis() {
                     const status = parts.length ? `かかとラインに対して、${parts.join('、')}です。` : 'かかとラインに対して概ねスクエアです。';
                     return `<strong>現状：</strong>${status}<br>
                            <strong>理想：</strong>肩・腰のラインがかかとラインと平行（スクエア）であることが理想です。<br>
-                           <strong>改善方法：</strong>肩・腰をかかとラインと平行になるように微調整してください。`;
+                           `;
                 } else {
                     return `<strong>現状：</strong>体の向きに軽微なずれがあります。<br>
                            <strong>理想：</strong>肩・腰のラインがかかとラインと平行な状態です。<br>
-                           <strong>改善方法：</strong>全体的な姿勢を微調整してください。`;
+                           `;
                 }
             }
             
@@ -2500,19 +2563,19 @@ function performDiagnosis() {
                 if (data.isTooArched) {
                     return `<strong>現状：</strong>腰が反りすぎて背中の曲がり具合が深すぎます。<br>
                            <strong>理想：</strong>適度に伸びた自然なS字カーブが理想です。<br>
-                           <strong>改善方法：</strong>腰の反りを抑えて、もう少し背筋を伸ばしてください。`;
+                           `;
                 } else if (data.isTooRounded) {
                     return `<strong>現状：</strong>背中が丸くなりすぎて猫背気味になっています。<br>
                            <strong>理想：</strong>適度に伸びた自然なS字カーブが理想です。<br>
-                           <strong>改善方法：</strong>もう少し胸を張って背筋を伸ばしてください。`;
+                           `;
                 } else if (data.isTooStraight) {
                     return `<strong>現状：</strong>背中が真っすぐすぎて自然な曲がりがありません。<br>
                            <strong>理想：</strong>自然なS字カーブを保つことが理想です。<br>
-                           <strong>改善方法：</strong>自然な背中の曲がり具合を意識してください。`;
+                           `;
                 } else {
                     return `<strong>現状：</strong>背中の曲がり具合が不安定です。<br>
                            <strong>理想：</strong>適度に伸びた自然なS字カーブが理想です。<br>
-                           <strong>改善方法：</strong>背筋を伸ばし、自然な姿勢を心がけてください。`;
+                           `;
                 }
             }
             
@@ -2543,38 +2606,38 @@ function performDiagnosis() {
                 'ballPosition': {
                     excellent: '理想的なボール位置です。選択されたクラブに応じた適切な位置にボールが置かれています。',
                     good: '概ね良いボール位置ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>ボール位置が理想から大きくずれています。<br><strong>理想位置：</strong>ドライバーは左足かかと内側、アイアンは徐々に右に移動し、8番アイアン～ウェッジは両足センターが理想です。<br><strong>改善方法：</strong>ボールの位置を理想位置に調整してください。正しい位置に置くことで、クラブの性能を最大限に発揮できます。' :
-                          '<strong>現状：</strong>ボール位置が理想から大きくずれています。<br><strong>理想位置：</strong>ドライバーは左足かかと内側、アイアンは徐々に右に移動し、8番アイアン～ウェッジは両足センターが理想です。<br><strong>改善方法：</strong>ボールの位置を理想位置に調整してください。正しい位置に置くことで、クラブの性能を最大限に発揮できます。'
+                    poor: score < 75 ? '<strong>現状：</strong>ボール位置が理想から大きくずれています。<br><strong>理想位置：</strong>ドライバーは左足かかと内側、アイアンは徐々に右に移動し、8番アイアン～ウェッジは両足センターが理想です。' :
+                          '<strong>現状：</strong>ボール位置が理想から大きくずれています。<br><strong>理想位置：</strong>ドライバーは左足かかと内側、アイアンは徐々に右に移動し、8番アイアン～ウェッジは両足センターが理想です。'
                 },
                 'stance': {
                     excellent: '理想的なスタンス幅です。ドライバーは肩幅より少し広め、その他は肩幅で安定感があります。',
                     good: '概ね良いスタンス幅ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>スタンス幅が狭すぎて不安定です。<br><strong>理想幅：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です。<br><strong>改善方法：</strong>足をもう少し広げて安定感を向上させてください。適切なスタンスでバランスの取れたスイングが可能になります。' :
-                          '<strong>現状：</strong>スタンス幅が広すぎて動きが制限されます。<br><strong>理想幅：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です。<br><strong>改善方法：</strong>足をもう少し狭めて機動性を向上させてください。適切なスタンスでスムーズなスイングが可能になります。'
+                    poor: score < 75 ? '<strong>現状：</strong>スタンス幅が狭すぎて不安定です。<br><strong>理想幅：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です。' :
+                          '<strong>現状：</strong>スタンス幅が広すぎて動きが制限されます。<br><strong>理想幅：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です。'
                 },
                 'posture': {
                     excellent: '理想的な前傾姿勢です。股関節から適切な角度で前傾しています。',
                     good: '概ね良い姿勢ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>前傾が浅すぎて理想から大きくずれています。<br><strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。<br><strong>改善方法：</strong>股関節からもう少し深く前傾してください。'
-                          : '<strong>現状：</strong>前傾が深すぎて理想から大きくずれています。<br><strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。<br><strong>改善方法：</strong>もう少し上体を起こしてください。'
+                    poor: score < 75 ? '<strong>現状：</strong>前傾が浅すぎて理想から大きくずれています。<br><strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。'
+                          : '<strong>現状：</strong>前傾が深すぎて理想から大きくずれています。<br><strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。'
                 },
                 'handPosition': {
                     excellent: '理想的な手の位置です。体の中心線より少し左に適切に位置しています。',
                     good: '概ね良い手の位置ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>手が左に寄りすぎて理想位置からずれています。<br><strong>理想位置：</strong>体の中心線より少し左（左内もも付近）が理想です。<br><strong>改善方法：</strong>手をもう少し右に移動させてください。正しい手の位置により、スイングプレーンが安定します。' :
-                          '<strong>現状：</strong>手が右に寄りすぎて理想位置からずれています。<br><strong>理想位置：</strong>体の中心線より少し左（左内もも付近）が理想です。<br><strong>改善方法：</strong>手をもう少し左に移動させてください。正しい手の位置により、スイングプレーンが安定します。'
+                    poor: score < 75 ? '<strong>現状：</strong>手が左に寄りすぎて理想位置からずれています。<br><strong>理想位置：</strong>体の中心線より少し左（左内もも付近）が理想です。' :
+                          '<strong>現状：</strong>手が右に寄りすぎて理想位置からずれています。<br><strong>理想位置：</strong>体の中心線より少し左（左内もも付近）が理想です。'
                 },
                 'headPosition': {
                     excellent: '理想的な頭の位置です。適切なバランスの取れた位置にあります。',
                     good: '概ね良い頭の位置ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>頭が左に寄りすぎてバランスが崩れています。<br><strong>理想位置：</strong>スタンス中央より少し右（ボールの後方）が理想です。<br><strong>改善方法：</strong>頭をもう少し右に移動させてください。正しい頭の位置により、スイング軸が安定します。' :
-                          '<strong>現状：</strong>頭が右に寄りすぎてバランスが崩れています。<br><strong>理想位置：</strong>スタンス中央（ボールの後方）が理想です。<br><strong>改善方法：</strong>頭をもう少し左に移動させてください。正しい頭の位置により、スイング軸が安定します。'
+                    poor: score < 75 ? '<strong>現状：</strong>頭が左に寄りすぎてバランスが崩れています。<br><strong>理想位置：</strong>スタンス中央より少し右が理想です。' :
+                          '<strong>現状：</strong>頭が右に寄りすぎてバランスが崩れています。<br><strong>理想位置：</strong>スタンス中央が理想です。'
                 },
                 'weight': {
-                    excellent: '理想的な体重配分です。両足に均等に体重が分散されています。',
-                    good: '概ね良い体重配分ですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>右足に体重がかかりすぎてバランスが崩れています。<br><strong>理想配分：</strong>両足に均等（50:50）が理想です。<br><strong>改善方法：</strong>左足により体重をかけてバランスを取ってください。正しい体重配分により、安定したスイングが可能になります。' :
-                          '<strong>現状：</strong>左足に体重がかかりすぎてバランスが崩れています。<br><strong>理想配分：</strong>両足に均等（50:50）が理想です。<br><strong>改善方法：</strong>右足により体重をかけてバランスを取ってください。正しい体重配分により、安定したスイングが可能になります。'
+                    excellent: '理想的な体重配分です。クラブに応じた配分が取れています（アイアン=左右均等／ドライバー=右6:左4）。',
+                    good: '概ね良い体重配分ですが、クラブに応じて微調整するとより安定します（アイアン=左右均等／ドライバー=右6:左4）。',
+                    poor: score < 75 ? '<strong>現状：</strong>右足に体重がかかりすぎてバランスが崩れています。<br><strong>理想配分：</strong>アイアンは左右均等、ドライバーは右足6割・左足4割。' :
+                          '<strong>現状：</strong>左足に体重がかかりすぎてバランスが崩れています。<br><strong>理想配分：</strong>アイアンは左右均等、ドライバーは右足6割・左足4割。'
                 },
                 'forwardLean': {
                     excellent: '理想的な前傾角度です。クラブに応じた適切な前傾姿勢が取れています。',
@@ -2591,8 +2654,8 @@ function performDiagnosis() {
                 'frontBackBalance': {
                     excellent: '理想的な前後バランスです。重心が適切な位置にあります。',
                     good: '概ね良い前後バランスですが、微調整でより安定します。',
-                    poor: score < 75 ? '<strong>現状：</strong>重心が前（つま先）に寄りすぎています。<br><strong>理想位置：</strong>足の土踏まず上が理想です。<br><strong>改善方法：</strong>もう少し後ろ（かかと側）に体重をかけてください。適切な重心位置により、バランスの取れたスイングが可能になります。' :
-                          '<strong>現状：</strong>重心が後ろ（かかと）に寄りすぎています。<br><strong>理想位置：</strong>足の土踏まず上が理想です。<br><strong>改善方法：</strong>もう少し前（つま先側）に体重をかけてください。適切な重心位置により、力強いスイングが可能になります。'
+                    poor: score < 75 ? '<strong>現状：</strong>重心が前（つま先）に寄りすぎています。<br><strong>理想位置：</strong>足の土踏まず上が理想です。' :
+                          '<strong>現状：</strong>重心が後ろ（かかと）に寄りすぎています。<br><strong>理想位置：</strong>足の土踏まず上が理想です。'
                 },
                 'bodyDirection': {
                     excellent: '理想的な体の向きです。肩と腰のラインが適切に揃っています。',
@@ -2659,19 +2722,19 @@ function performDiagnosis() {
             
             // 具体的現状を使用した詳細コメント
             const mobileComments = {
-                'ballPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> クラブに適した位置に置くことが大切です<br><strong>改善方法:</strong> ボールの位置を調整してください`,
-                'forwardLean': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 適切な前傾角度を保つことが重要です<br><strong>改善方法:</strong> 股関節から前傾し背筋を伸ばしてください`,
-                'stance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です<br><strong>改善方法:</strong> 足の位置を調整してください`,
-                'headPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ボールの真上が理想位置です<br><strong>改善方法:</strong> 頭の位置を調整してください`,
-                'handPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 左太ももの内側が理想です<br><strong>改善方法:</strong> 手の位置を調整してください`,
-                'weight': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 左右均等が理想です<br><strong>改善方法:</strong> バランスを整えてください`,
-                'handBodyDistance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 適度な間隔を保つことが大切です<br><strong>改善方法:</strong> 手の位置を調整してください`,
-                'frontBackBalance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 肩の位置の真下〜わずかにつま先寄りに母指球が来るのが理想です<br><strong>改善方法:</strong> 重心を微調整して肩の真下（ややつま先寄り）に母指球を合わせてください`,
-                'bodyDirection': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 目標方向と平行が理想です<br><strong>改善方法:</strong> 体の向きを調整してください`,
-                'backCurvature': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 自然なS字カーブが理想です<br><strong>改善方法:</strong> 姿勢を調整してください`
+                'ballPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> クラブに適した位置に置くことが大切です`,
+                'forwardLean': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> クラブが短くなるほど深くなり、ウエッジで最も深くなります。`,
+                'stance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です`,
+                'headPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 頭の位置はドライバー以外はセンター、ドライバーはセンターより少し右が理想です`,
+                'handPosition': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 左太ももの内側が理想です`,
+                'weight': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> アイアンは左右均等、ドライバーは正面からの時、右足に6割・左足に4割が理想です`,
+                'handBodyDistance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 適度な間隔を保つことが大切です`,
+                'frontBackBalance': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 前後のバランスは、センターもしくはややつま先寄りが理想です`,
+                'bodyDirection': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 目標方向と平行が理想です`,
+                'backCurvature': `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 自然なS字カーブが理想です`
             };
             
-            const comment = mobileComments[key] || `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 正しいフォームが重要です<br><strong>改善方法:</strong> 基本姿勢を見直してください`;
+            const comment = mobileComments[key] || `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 正しいフォームが重要です`;
             console.log('📱 モバイル用コメント生成完了:', comment.substring(0, 30) + '...');
             return comment;
         }
@@ -2706,11 +2769,11 @@ function performDiagnosis() {
                 
                 if (data.isTooWide) {
                     if (ratioDeviation > 0.3) {
-                        return `スタンスが肩幅の${currentRatio}倍で非常に幅すぎます（理想${idealRatio}倍より${ratioDeviation}倍幅い）`;
+                        return `スタンスが肩幅の${currentRatio}倍で非常に広すぎます（理想${idealRatio}倍より${ratioDeviation}倍広い）`;
                     } else if (ratioDeviation > 0.15) {
-                        return `スタンスが肩幅の${currentRatio}倍で明らかに幅すぎます（理想${idealRatio}倍より${ratioDeviation}倍幅い）`;
+                        return `スタンスが肩幅の${currentRatio}倍で明らかに広すぎます（理想${idealRatio}倍より${ratioDeviation}倍広い）`;
                     } else {
-                        return `スタンスが肩幅の${currentRatio}倍でやや幅すぎます（理想${idealRatio}倍より${ratioDeviation}倍幅い）`;
+                        return `スタンスが肩幅の${currentRatio}倍でやや広すぎます（理想${idealRatio}倍より${ratioDeviation}倍広い）`;
                     }
                 } else if (data.isTooNarrow) {
                     if (ratioDeviation > 0.3) {
@@ -2741,36 +2804,39 @@ function performDiagnosis() {
                     }
                 }
             } else if (analysisKey === 'headPosition') {
-                // 数字は出さず方向のみを明示
+                // クラブ別に案内を出し分け（driver: 中央より少し右／others: センター）
+                const club = data.club;
                 if (data.isLeftTooMuch) {
-                    return '頭が左に寄りすぎています。ボールの真上〜やや後方を意識しましょう。';
+                    return club === 'driver'
+                      ? '頭が左に寄りすぎています。真ん中よりも少し右になるようにしてください。'
+                      : '頭が左に寄りすぎています。センターに来るようにして下さい。';
                 } else if (data.isRightTooMuch) {
-                    return '頭が右に寄りすぎています。ボールの真上〜やや後方を意識しましょう。';
+                    return club === 'driver'
+                      ? '頭が右に寄りすぎています。真ん中の少し右になる程度にしてください。'
+                      : '頭が右に寄りすぎています。センターに来るようにして下さい。';
                 }
             } else if (analysisKey === 'weight') {
-                // 数字は出さず、左右の偏りを明示
-                if (data.isRightHeavy) {
-                    return '右重心に偏っています。左右均等になるように調整しましょう。';
-                } else if (data.isLeftHeavy) {
-                    return '左重心に偏っています。左右均等になるように調整しましょう。';
-                }
+                // 現状の体重配分（％）を明示（注記は付けない）
+                const r = Math.round((data.rightRatio ?? 0.5) * 100);
+                const l = Math.round((data.leftRatio ?? 0.5) * 100);
+                return `現在の配分：右${r}%・左${l}%`;
             } else if (analysisKey === 'forwardLean' && data) {
-                // 数字を出さずに定性的に表現
+                // 数字は使わず、端的な指示に統一
                 if (data.isTooDeep) {
-                    return '前傾が深すぎます。もう少し上体を起こし、股関節からの前傾を整えましょう。';
+                    return '前傾が深すぎます。もう少し浅くしてください。';
                 } else if (data.isTooShallow) {
-                    return '前傾が浅すぎます。股関節からもう少し深く前傾しましょう。';
+                    return '前傾が浅すぎます。もう少し深くしてください。';
                 } else {
-                    return '概ね適切です。背筋を伸ばし、股関節から自然な前傾を保ちましょう。';
+                    return '概ね適切です。クラブの長さに応じた前傾を維持しましょう。';
                 }
             } else if (analysisKey === 'handBodyDistance' && data) {
                 // 数字は使わず、定性的コメントのみ
                 if (data.isTooFar) {
-                    return '手が体から遠すぎます。もう少し体に近づけ、腕に軽い余裕が出る位置にしましょう。';
+                    return '手が体から遠すぎます。ドライバー以外のクラブでは、手は肩の真下になります。';
                 } else if (data.isTooClose) {
-                    return '手が体に近すぎます。もう少し体から離して、腕に自然なゆとりを作りましょう。';
+                    return '手が体に近すぎます。ドライバー以外のクラブでは、手は肩の真下になります。';
                 } else {
-                    return '概ね適切です。腕に軽い余裕を保ち、力みのないアドレスを意識しましょう。';
+                    return '概ね適切です。ドライバー以外のクラブでは、手は肩の真下になります。';
                 }
             } else if (analysisKey === 'frontBackBalance' && data.currentBalance !== undefined) {
                 // 数字なしの方向指示（肩の真下に母指球が理想）
@@ -2826,6 +2892,9 @@ function performDiagnosis() {
                     }
                 } else if (data.isTooStraight) {
                     return `背中が真っすぐすぎて自然な曲線がありません（曲線度${curvaturePercent}%）`;
+                } else {
+                    // 特に問題が検出されない場合は良好とする
+                    return '背中の曲がり具合は概ね適切です。';
                 }
             }
             
@@ -2895,38 +2964,32 @@ function performDiagnosis() {
                 };
                 
                 return `<strong>現状：</strong>前傾が理想から大きくずれています。<br>
-                        <strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。<br>
-                        <strong>改善方法：</strong>股関節から適切に前傾し、背筋をまっすぐに保ってください。`;
+                        <strong>理想：</strong>ドライバーは浅め、クラブが短いほど徐々に深く、ウェッジで最も深い前傾が理想です。`;
             }
             
             if (key === 'stance') {
                 return `<strong>現状：</strong>スタンス幅が理想から大きくずれています。<br>
-                        <strong>理想：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他のクラブは肩幅が理想です。<br>
-                        <strong>改善方法：</strong>足の位置を調整して適切なスタンス幅を作ってください。正しいスタンスにより、バランスの取れたスイングが可能になります。`;
+                        <strong>理想：</strong>ドライバーは肩幅より少し広め（約1.2倍）、その他のクラブは肩幅が理想です。`;
             }
             
             if (key === 'headPosition') {
                 return `<strong>現状：</strong>頭の位置が適正位置からずれています。<br>
-                        <strong>理想：</strong>ボールの真上またはやや後方に頭を配置するのが理想です。<br>
-                        <strong>改善方法：</strong>頭の位置をボールの真上に調整し、背骨をまっすぐに保ってください。正しい頭の位置によりバランスの取れたスイングが可能になります。`;
+                        <strong>理想：</strong>頭の位置はドライバー以外はセンター、ドライバーはセンターより少し右が理想です。`;
             }
             
             if (key === 'handPosition') {
                 return `<strong>現状：</strong>手の位置が理想位置からずれています。<br>
-                        <strong>理想：</strong>手は左太ももの内側に位置するのが理想です。<br>
-                        <strong>改善方法：</strong>手の位置を左太ももの内側に調整し、自然なハンドファーストを作ってください。正しい手の位置により安定したインパクトが得られます。`;
+                        <strong>理想：</strong>手は左太ももの内側に位置するのが理想です。`;
             }
             
             if (key === 'weight') {
                 return `<strong>現状：</strong>体重配分が理想から偏っています。<br>
-                        <strong>理想：</strong>左右の足に均等に体重を配分するのが理想です。<br>
-                        <strong>改善方法：</strong>両足にバランス良く体重をかけ、安定したスタンスを作ってください。正しい体重配分により安定したスイングが可能になります。`;
+                        <strong>理想：</strong>アイアンは左右均等、ドライバーは正面からの時、右足に6割・左足に4割が理想です。`;
             }
             
             if (key === 'handBodyDistance') {
                 return `<strong>現状：</strong>手と体の距離が適正範囲から外れています。<br>
-                        <strong>理想：</strong>手と体の間に適度な間隔を保つのが理想です。<br>
-                        <strong>改善方法：</strong>手を体から適度に離し、腕に余裕を持たせてください。正しい距離により自然なスイングプレーンが作れます。`;
+                        <strong>理想：</strong>手と体の間に適度な間隔を保つのが理想です。`;
             }
             
             if (key === 'frontBackBalance') {
@@ -3066,7 +3129,7 @@ function performDiagnosis() {
                     } else if (analysisKey === 'stance') {
                         specificStatus = score < 80 ? 'スタンスが広すぎます' : 'スタンスが狭すぎます';
                     } else if (analysisKey === 'headPosition') {
-                        specificStatus = '頭の位置が中心からずれています（ボールの真上〜やや後方が理想）';
+                        specificStatus = '頭の位置が両足のセンターからずれています';
                     } else if (analysisKey === 'handPosition') {
                         specificStatus = '手の位置が適正からずれています（左太もも内側が目安）';
                     } else if (analysisKey === 'weight') {
@@ -3085,33 +3148,23 @@ function performDiagnosis() {
                 }
                 
                 // 各カテゴリごとに具体的な現状を取得してコメントを生成
-                const mobileDetailedComments = {};
-                
-                if (analysisKey === 'ballPosition') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> クラブに適した位置に配置することが重要です<br><strong>改善方法:</strong> ボールの位置を理想位置に調整してください`;
-                } else if (analysisKey === 'stance') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想です<br><strong>改善方法:</strong> 足の位置を調整して適切なスタンス幅を作ってください`;
-                } else if (analysisKey === 'headPosition') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ボールの真上またはやや後方が理想です<br><strong>改善方法:</strong> 頭の位置をボールの真上に調整してください`;
-                } else if (analysisKey === 'handPosition') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 左太ももの内側が理想的です<br><strong>改善方法:</strong> 手の位置を左太ももの内側に調整してください`;
-                } else if (analysisKey === 'weight') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 左右の足に均等に配分することが大切です<br><strong>改善方法:</strong> 両足にバランスよく体重をかけてください`;
-                } else if (analysisKey === 'forwardLean') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 適切な前傾角度を保つことが重要です<br><strong>改善方法:</strong> 股関節から前傾し、背筋をまっすぐに保ってください`;
-                } else if (analysisKey === 'handBodyDistance') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 適度な間隔を保つことが大切です<br><strong>改善方法:</strong> 手を体から適度に離し、腕に余裕を持たせてください`;
-                } else if (analysisKey === 'frontBackBalance') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 肩の位置の真下に母指球が来るのが理想です<br><strong>改善方法:</strong> 肩の真下に母指球が来るように重心を微調整してください`;
-                } else if (analysisKey === 'bodyDirection') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 肩と腰のラインが「かかとライン」と平行（スクエア）であることが大切です<br><strong>改善方法:</strong> 肩と腰をかかとラインと平行に調整してください`;
-                } else if (analysisKey === 'backCurvature') {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 自然なS字カーブが理想です<br><strong>改善方法:</strong> 姿勢を調整してください`;
-                } else {
-                    mobileDetailedComments[analysisKey] = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> 正しいフォームが重要です<br><strong>改善方法:</strong> 基本姿勢を見直してください`;
-                }
-                
-                detailedFeedback = mobileDetailedComments[analysisKey] || '<strong>現状:</strong> 改善が必要です<br><strong>理想:</strong> 正しいフォームが重要です<br><strong>改善方法:</strong> 基本姿勢を見直してください';
+                const selectedClub = (document.getElementById('clubSelect')||{}).value || (detailedAnalysisData[analysisKey]?.club) || 'driver';
+                const idealWeightText = selectedClub === 'driver' ? '右60%・左40%' : '左右均等（50:50）';
+                const ideals = {
+                  ballPosition: 'ドライバーは左足かかと内側。FW/UTはドライバーよりボール1個分右。短いクラブほど徐々に右足寄り。8I〜SWは両足センター。',
+                  stance: 'ドライバーは肩幅より少し広め（約1.2倍）、その他は肩幅が理想。',
+                  headPosition: 'ドライバー以外はセンター、ドライバーはセンターより少し右。',
+                  handPosition: 'すべてのクラブで左足内もも（左太ももの内側）。',
+                  weight: `アイアンは左右均等、ドライバーは${idealWeightText}。`,
+                  forwardLean: 'クラブが短くなるほど深くなり、ウエッジで最も深くなります。',
+                  handBodyDistance: 'アイアンは肩の真下で拳1.5〜2個、ドライバーはそれより少し離す。',
+                  frontBackBalance: '前後のバランスは、センターもしくはややつま先寄りが理想。',
+                  bodyDirection: '肩と腰のラインが「かかとライン」と平行（スクエア）。',
+                  backCurvature: '自然なS字カーブが理想。',
+                  default: '正しいフォームが重要です。'
+                };
+                const idealText = ideals[analysisKey] || ideals.default;
+                detailedFeedback = `<strong>現状:</strong> ${specificStatus}<br><strong>理想:</strong> ${idealText}`;
                 console.log('✅ モバイル詳細コメント生成完了:', detailedFeedback.substring(0, 30) + '...');
             } else {
                 // 90点以上の場合
@@ -3518,12 +3571,14 @@ function performDiagnosis() {
 
             // モバイル用のメッセージ
             const fallbackComments = {
-                ballPosition: 'MediaPipe未対応：手動でボール位置を調整してください',
+                ballPosition: '理想: ドライバーは左足かかと内側。FW/UTはドライバーよりボール1個分右。短いクラブほど徐々に右足寄り。8I〜SWは両足のセンター。現在のクラブに合わせて調整してください。',
                 stance: 'MediaPipe未対応：足幅を肩幅程度に保ちましょう',
                 posture: 'MediaPipe未対応：背筋を伸ばし前傾を意識してください',
                 armPosition: isMobile ? 'モバイル診断：腕は自然に垂らしましょう' : '腕の位置を確認してください',
-                weightDistribution: 'MediaPipe未対応：体重を均等に分散させましょう',
-                headPosition: 'MediaPipe未対応：頭は動かさず正面を向きましょう'
+                weightDistribution: '理想: アイアンは左右均等、ドライバーは正面からの時、右足に6割・左足に4割',
+                headPosition: '理想: ドライバー以外はセンター、ドライバーはセンターより少し右',
+                handBodyDistance: '理想: 手と体の距離は、アイアンでは手が肩の真下になり、拳1.5個〜2個、ドライバーではそれより少し離れるのが理想です',
+                handPosition: '理想: すべてのクラブで左足内もも（左太ももの内側）が正しい位置です'
             };
 
             // フォールバック用の総合スコア表示
