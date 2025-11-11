@@ -480,16 +480,106 @@
             z-index: 10000;
         }
         .policy-link:hover { background: rgba(0, 0, 0, 0.75); }
+        /* 下部の安全スペース（モバイルでフローティングと重なり回避） */
+        .bottom-safe-space { height: 0; }
+
+        /* 上部（レッスン案内の上）に表示するLINE登録案内 */
+        .line-cta-section {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 24px;
+            margin-top: 24px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.12);
+            border-left: 5px solid #06C755;
+        }
+        .accent-red { color: #e53935; }
+        .line-cta-title { font-size: 1.6em; font-weight: 800; color: #06C755; margin-bottom: 8px; }
+        .line-cta-sub { color: #444; margin-bottom: 12px; }
+        .line-cta-points { color: #555; margin: 8px 0 16px 18px; }
+        .line-cta-btn {
+            display: inline-block; background: #06C755; color: #fff; text-decoration: none;
+            padding: 12px 18px; border-radius: 28px; font-weight: 800;
+        }
+        .line-cta-secondary { margin-left: 12px; color: #666; font-size: 0.95em; }
+
+        /* 左下フローティングCTA（アプリ化考慮：セーフエリア対応） */
+        .left-cta {
+            position: fixed;
+            left: max(10px, env(safe-area-inset-left));
+            bottom: max(10px, env(safe-area-inset-bottom));
+            z-index: 10001;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .left-cta__btn {
+            background: #06C755; color: #fff; border: 0; border-radius: 24px;
+            padding: 10px 14px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+            line-height: 1.1; text-align: center; display: inline-block;
+        }
+        .left-cta__pill {
+            background: rgba(0,0,0,0.65); color: #fff; text-decoration: none;
+            padding: 8px 12px; border-radius: 12px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        @media (max-width: 480px) {
+            .left-cta__btn { padding: 12px 16px; font-size: 14px; }
+            .left-cta__pill { font-size: 12px; }
+        }
+
+        /* スマホでプライバシーポリシーと重ならないよう少し上にずらす */
+        @media (max-width: 640px) {
+            .left-cta {
+                bottom: calc(max(10px, env(safe-area-inset-bottom)) + 56px);
+            }
+            /* ヘッダーの野山佳治写真を“現在の150%”（40px→60px）に */
+            img.profile-top {
+                width: 60px !important;
+                height: 60px !important;
+            }
+            /* レッスンのご案内（スマホ時は小さく・一行表示） */
+            .lesson-title {
+                font-size: 2.0em !important;
+                line-height: 1.2 !important;
+                white-space: nowrap !important;
+            }
+            .bottom-safe-space { height: 120px; }
+        }
+
+        /* LINE登録CTA: モーダル */
+        .modal-backdrop {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 10002; display: none;
+        }
+        .modal {
+            position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 10003;
+        }
+        .modal__panel {
+            width: min(680px, 92vw);
+            background: #fff; border-radius: 16px; padding: 22px; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        }
+        .modal__title { font-size: 1.4em; font-weight: 800; margin-bottom: 10px; }
+        .modal__list { color: #444; margin: 10px 0 16px 18px; }
+        .modal__cta {
+            display: inline-block; text-decoration: none; background: #06C755; color: #fff;
+            padding: 12px 18px; border-radius: 28px; font-weight: 800;
+        }
+        .modal__close { background: transparent; border: 0; font-size: 18px; margin-left: 12px; cursor: pointer; }
+        .modal__foot { margin-top: 10px; color: #666; font-size: 0.9em; }
+        .modal__x { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 999px; border: 0; background: rgba(0,0,0,0.08); cursor: pointer; font-size: 18px; }
     </style>
 </head>
 <body>
     <a class="policy-link" href="privacy-policy.html" target="_blank" rel="noopener">プライバシーポリシー</a>
+    <!-- 左下フローティング：LINE登録とPDF案内（プライバシーポリシーの対になるUI） -->
+    <div class="left-cta" id="leftCta">
+        <a class="left-cta__btn" href="https://lin.ee/2zUywIp?utm_source=diagnosis&utm_medium=floating_btn&utm_campaign=pdf1107" target="_blank" rel="noopener" onclick="trackLineClick('floating_btn')">LINE<br>登録</a>
+        <a class="left-cta__pill" href="javascript:void(0)" onclick="openLineModal()">LINE登録で正しいアドレス＆間違ったアドレスからでるミスの解説PDFプレゼント</a>
+    </div>
     <div class="container">
         <div class="header">
             <div style="background: rgba(255, 255, 255, 0.15); border-radius: 15px; padding: 20px; margin-bottom: 20px; backdrop-filter: blur(10px);">
                 <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
                     <a href="https://noyamagolf.com/" target="_blank" style="display: block;">
-                        <img src="./noyama-keiji.png" alt="野山佳治プロ" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid white; object-fit: cover; cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                        <img class="profile-top" src="./noyama-keiji.png" alt="野山佳治プロ" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid white; object-fit: cover; cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
                     </a>
                     <div style="text-align: center;">
                         <div style="font-size: 1.2em; font-weight: bold; color: #FFD700;">ティーチングプロ</div>
@@ -537,6 +627,8 @@
             </div>
         </div>
 
+        
+
         <div id="analysisResults" class="hidden">
             <div class="analysis-container">
                 <div class="image-section">
@@ -583,10 +675,23 @@
             </div>
         </div>
 
+        <!-- LINE登録案内（レッスン案内の上） -->
+        <div class="line-cta-section">
+            <div class="line-cta-title">🎁 <span class="accent-red">プレゼント</span>：正しいアドレス＆間違ったアドレスから出やすいミスを徹底解説PDF</div>
+            <div class="line-cta-sub">LINE登録でアドレスの詳細解説PDFを無料配布中。</div>
+            <ul class="line-cta-points">
+                <li>理想のスタンス幅、前傾角度、重心の位置等を解説</li>
+                <li>間違ったアドレスが引き起こすミスも徹底解説</li>
+            </ul>
+            <div>
+                <a class="line-cta-btn" href="https://lin.ee/2zUywIp?utm_source=diagnosis&utm_medium=inline&utm_campaign=pdf1107" target="_blank" rel="noopener" onclick="trackLineClick('inline_above_lessons')">LINEで無料で受け取る</a>
+            </div>
+        </div>
+
         <!-- 野山佳治レッスン案内 -->
         <div style="background: rgba(255, 255, 255, 0.95); border-radius: 20px; padding: 40px; margin-top: 30px; box-shadow: 0 15px 35px rgba(0,0,0,0.2);">
             <div style="text-align: center; margin-bottom: 30px;">
-                <h2 style="color: #667eea; font-size: 2.5em; margin-bottom: 15px;">🏌️ レッスンのご案内</h2>
+                <h2 class="lesson-title" style="color: #667eea; font-size: 2.5em; margin-bottom: 15px;">🏌️ レッスンのご案内</h2>
                 <div style="display: flex; align-items: center; justify-content: center; gap: 30px; flex-wrap: wrap;">
                     <a href="https://noyamagolf.com/" target="_blank" style="display: block;">
                         <img src="./noyama-keiji.png" alt="野山佳治プロ" style="width: 150px; height: 150px; border-radius: 50%; border: 5px solid #667eea; object-fit: cover; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: transform 0.2s ease; background-color: #f0f0f0;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
@@ -641,6 +746,7 @@
                 <p style="color: #666; font-size: 1.1em; margin: 0;">
                     詳しくはホームページをご覧ください：
                     <a href="https://noyamagolf.com/" target="_blank" style="color: #667eea; text-decoration: none; font-weight: bold;">https://noyamagolf.com/</a>
+                    <div class="bottom-safe-space"></div>
                 </p>
             </div>
         </div>
@@ -1338,6 +1444,13 @@ function performDiagnosis() {
       }
     } catch(e) { console.warn('post-diagnosis overlay draw failed', e); }
             
+    // 診断完了フラグ（LINEモーダルは表示しない）
+            try {
+                diagnosisCompleted = true;
+                // 以前はここで maybeShowLineModal() を呼び出していましたが、
+                // 診断後の自動ポップアップを無効化するため呼び出しを停止します。
+            } catch (_) {}
+
     // ボタンを元に戻す
             const btn = document.getElementById('diagnosisBtn');
             btn.textContent = '🔍 診断開始';
@@ -1866,6 +1979,13 @@ function performDiagnosis() {
             };
             return angles[club] || 38;
         }
+
+        // クラブ別の前傾許容度（スコア/判定用）
+        function getForwardLeanTolerance(club){
+            // 7Iは撮影条件差が出やすいので広めに許容
+            if (club === 'iron7') return { judge: 4, excellent: 6, good: 8, ok: 10 };
+            return { judge: 2.5, excellent: 3, good: 5, ok: 8 };
+        }
         
         // クラブ別の理想的な手の位置を取得（スタンス中心からの相対位置）
         function getIdealHandPosition(club) {
@@ -1891,11 +2011,11 @@ function performDiagnosis() {
         
         // クラブ別の理想的な手と体の間隔を取得（後方視点用）
         function getIdealHandBodyDistance(club) {
-            // ドライバー以外のクラブでは、手は肩の真下
+            // 水平距離の目安（肩幅に対する割合）
             if (club === 'driver') {
-                return 0.08; // 体幅の8%程度（目安）
+                return 0.08; // ドライバーはやや離す
             } else {
-                return 0.0; // 肩の真下（距離はオフセット0を理想とする）
+                return 0.05; // アイアンは肩の真下〜わずかに前（拳1.5〜2個相当）
             }
         }
 
@@ -1960,8 +2080,9 @@ function performDiagnosis() {
                 const selectedClub = document.getElementById('clubSelect').value;
                 const idealAngle = getIdealForwardLean(selectedClub);
                 const angleDiff = angle - idealAngle;
-                // 判定用の許容幅（±2.5°以内は適正）
-                const tolDeg = 2.5;
+                // 判定用の許容幅（クラブ別）
+                const tol = getForwardLeanTolerance(selectedClub);
+                const tolDeg = tol.judge;
                 
                 // 詳細データを保存
                 detailedAnalysisData.forwardLean = {
@@ -1982,9 +2103,9 @@ function performDiagnosis() {
                 });
                 
                 const absAngleDiff = Math.abs(angleDiff);
-                if (absAngleDiff < 3) return 92;  // 3度以内
-                if (absAngleDiff < 5) return 85;  // 5度以内
-                if (absAngleDiff < 8) return 75;  // 8度以内
+                if (absAngleDiff < tol.excellent) return 92;
+                if (absAngleDiff < tol.good) return 85;
+                if (absAngleDiff < tol.ok) return 75;
                 return 68;
                 
             } catch (error) {
@@ -2000,6 +2121,8 @@ function performDiagnosis() {
                 const rightWrist = landmarks[16];
                 const leftShoulder = landmarks[11];
                 const rightShoulder = landmarks[12];
+                const leftHip = landmarks[23];
+                const rightHip = landmarks[24];
                 
                 const handCenter = {
                     x: (leftWrist.x + rightWrist.x) / 2,
@@ -2012,26 +2135,53 @@ function performDiagnosis() {
                 
                 const selectedClub = document.getElementById('clubSelect').value;
                 
-                // 肩の真下からの前後位置差（水平成分のみ、肩幅で正規化）
-                const bodyWidth = Math.max(1e-6, Math.abs(rightShoulder.x - leftShoulder.x));
-                const forwardOffsetNorm = (handCenter.x - shoulderCenter.x) / bodyWidth;
+                // 肩の真下からの前後位置差（水平成分のみ、基準幅で正規化）
+                const shoulderWidth = Math.abs(rightShoulder.x - leftShoulder.x);
+                const hipWidth = (leftHip && rightHip) ? Math.abs(rightHip.x - leftHip.x) : 0;
+                // 参照幅: 肩幅/腰幅のうち大きい方（極端な狭さで相対距離が過大化するのを回避）
+                const refWidth = Math.max(1e-6, shoulderWidth, hipWidth);
+                const forwardOffsetNorm = (handCenter.x - shoulderCenter.x) / refWidth;
                 const idealForwardOffset = getIdealHandPositionFromRear(selectedClub);
                 const positionDiff = Math.abs(forwardOffsetNorm - idealForwardOffset);
                 
                 // 手と体の間隔（水平距離のみ）
                 const horizDist = Math.abs(handCenter.x - shoulderCenter.x);
-                const relativeDistance = horizDist / bodyWidth;
+                const relativeDistance = horizDist / refWidth;
                 const idealDistance = getIdealHandBodyDistance(selectedClub);
                 const distanceDiff = Math.abs(relativeDistance - idealDistance);
+
+                // 腰基準の距離（ユーザー要望: 手の位置と腰の位置をみる）
+                const hipCenter = (leftHip && rightHip) ? {
+                    x: (leftHip.x + rightHip.x) / 2,
+                    y: (leftHip.y + rightHip.y) / 2
+                } : null;
+                const torsoVert = hipCenter ? Math.max(1e-6, Math.abs(shoulderCenter.y - hipCenter.y)) : 0.2;
+                const distToHip = hipCenter ? Math.hypot(handCenter.x - hipCenter.x, handCenter.y - hipCenter.y) : relativeDistance;
+                const distToHipNorm = distToHip / torsoVert; // 腰中心から手までの距離（胴体長で正規化）
                 
                 console.log('MediaPipe手の位置分析（後方）:', {
                     forwardOffsetNorm: Math.round(forwardOffsetNorm * 100) + '%',
                     idealForwardOffset: Math.round(idealForwardOffset * 100) + '%',
                     handBodyDistance: Math.round(relativeDistance * 100) + '%',
                     idealDistance: Math.round(idealDistance * 100) + '%',
+                    distToHipNorm: Math.round(distToHipNorm * 100) + '%',
                     club: selectedClub
                 });
                 
+                // クラブ別しきい値（7Iは個別調整）
+                const hbdParams = (() => {
+                    if (selectedClub === 'iron7') {
+                        return {
+                            posTol: 0.03,       // 肩の真下の許容（x差）
+                            closeMax: 0.34,     // これ未満は近い
+                            farMin: 0.58,       // これ超は遠い
+                            okMin: 0.34,        // 適正帯の下限（据え置き）
+                            okMax: 0.58         // 適正帯の上限（遠いの閾値まで広げる）
+                        };
+                    }
+                    return { posTol: 0.02, closeMax: 0.25, farMin: 0.60, okMin: 0.30, okMax: 0.50 };
+                })();
+
                 // 詳細データを保存
                 detailedAnalysisData.handBodyDistance = {
                     currentDistance: relativeDistance,
@@ -2039,24 +2189,48 @@ function performDiagnosis() {
                     forwardOffset: forwardOffsetNorm,
                     idealForwardOffset: idealForwardOffset,
                     club: selectedClub,
-                    // 許容を広めにして誤判定（近いのに遠い等）を軽減（±3%）
-                    isTooClose: relativeDistance < (idealDistance - 0.03),
-                    isTooFar: relativeDistance > (idealDistance + 0.03),
+                    // 判定（距離は腰中心からの距離で評価。肩の真下は位置の目安）
+                    isTooClose: (selectedClub !== 'driver')
+                        ? (Math.abs(handCenter.x - shoulderCenter.x) < hbdParams.posTol || distToHipNorm < hbdParams.closeMax)
+                        : (relativeDistance < (idealDistance - 0.03)),
+                    isTooFar: (selectedClub !== 'driver')
+                        ? (distToHipNorm > hbdParams.farMin)
+                        : (relativeDistance > (idealDistance + 0.03)),
                     positionDiff: positionDiff,
                     distanceDiff: distanceDiff
                 };
+
+                // 近い/遠いの強制スコア反映（90点以上で適正扱いされるのを防ぐ）
+                if (selectedClub !== 'driver') {
+                    if (detailedAnalysisData.handBodyDistance.isTooClose) {
+                        return 75; // 近すぎる → 中程度スコア
+                    }
+                    if (detailedAnalysisData.handBodyDistance.isTooFar) {
+                        return 68; // 遠すぎる → 低スコア
+                    }
+                }
+
+                // 良好ケースの早期判定（"近い"を除外し、適正レンジのみ）
+                // 適正寄り（位置が良好かつ腰距離が中間帯）
+                if (
+                  selectedClub !== 'driver' &&
+                  Math.abs(handCenter.x - shoulderCenter.x) <= (hbdParams.posTol + 0.03) &&
+                  distToHipNorm >= hbdParams.okMin && distToHipNorm <= hbdParams.okMax
+                ) {
+                    return 90;
+                }
                 
                 // 位置と距離の両方を評価（平均スコア）
                 let positionScore = 50;
                 if (positionDiff < 0.01) positionScore = 92;
-                else if (positionDiff < 0.02) positionScore = 85;
-                else if (positionDiff < 0.03) positionScore = 75;
+                else if (positionDiff < 0.025) positionScore = 85;
+                else if (positionDiff < 0.05) positionScore = 75;
                 else positionScore = 68;
-                
+
                 let distanceScore = 50;
-                if (distanceDiff < 0.015) distanceScore = 92;
-                else if (distanceDiff < 0.03) distanceScore = 85;
-                else if (distanceDiff < 0.05) distanceScore = 75;
+                if (distanceDiff < 0.02) distanceScore = 92;
+                else if (distanceDiff < 0.05) distanceScore = 85;
+                else if (distanceDiff < 0.08) distanceScore = 75;
                 else distanceScore = 68;
                 
                 return Math.round((positionScore + distanceScore) / 2);
@@ -3797,6 +3971,35 @@ function performDiagnosis() {
             }
         }
 
+        // ===== LINE登録モーダル＆バー制御 =====
+        function trackLineClick(place) {
+            try { gtag('event', 'line_register_click', { place: place || 'unknown' }); } catch(_) {}
+        }
+
+        // 固定バー（削除済み）の関数は撤去
+
+        function maybeShowLineModal() {
+            // 初回診断時のみ（1端末1回）
+            if (localStorage.getItem('lineGiftShown') === '1') return;
+            openLineModal();
+            localStorage.setItem('lineGiftShown', '1');
+        }
+
+        function openLineModal() {
+            const backdrop = document.getElementById('lineModalBackdrop');
+            const modal = document.getElementById('lineModal');
+            if (!backdrop || !modal) return;
+            backdrop.style.display = 'block';
+            modal.style.display = 'flex';
+        }
+        function closeLineModal() {
+            const backdrop = document.getElementById('lineModalBackdrop');
+            const modal = document.getElementById('lineModal');
+            if (!backdrop || !modal) return;
+            backdrop.style.display = 'none';
+            modal.style.display = 'none';
+        }
+
         // 初期化
         document.addEventListener('DOMContentLoaded', function() {
             console.log('ページ読み込み完了 - 初期化開始');
@@ -3810,5 +4013,24 @@ function performDiagnosis() {
             console.log('✅ アプリケーション準備完了');
         });
     </script>
+
+    <!-- LINE登録 モーダル -->
+    <div id="lineModalBackdrop" class="modal-backdrop" onclick="closeLineModal()"></div>
+    <div id="lineModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="lineModalTitle">
+        <div class="modal__panel" style="position: relative;">
+            <button class="modal__x" aria-label="閉じる" onclick="closeLineModal()">×</button>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div id="lineModalTitle" class="modal__title">🎁 PDFプレゼント：正しいアドレス＆間違ったアドレスから出やすいミスを徹底解説</div>
+            </div>
+            <p style="color:#444; margin: 10px 0 6px;">LINE登録で、写真付きで解説されているPDFを無料配布中。</p>
+            <p style="color:#444; margin: 6px 0;">理想のスタンス幅、前傾角度、重心の位置等を解説</p>
+            <p style="color:#444; margin: 6px 0 14px;">間違ったアドレスが引き起こすミスについても徹底解説</p>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <a class="modal__cta" href="https://lin.ee/2zUywIp?utm_source=diagnosis&utm_medium=modal&utm_campaign=pdf1107" target="_blank" rel="noopener" onclick="trackLineClick('modal')">LINEで無料で受け取る</a>
+                <button class="modal__close" onclick="closeLineModal()">後で</button>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>
