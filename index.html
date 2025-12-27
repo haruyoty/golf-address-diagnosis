@@ -749,7 +749,9 @@
 
         <div class="main-content">
             <div class="upload-section">
-                <button class="btn" onclick="selectImage()">📸 ギャラリーから選択</button>
+                <button class="btn" onclick="selectImage()">🖼️ ギャラリーから選択</button>
+                <button class="btn" onclick="openCamera()">📷 カメラで撮影</button>
+                <input id="cameraInput" type="file" accept="image/*;capture=camera" capture="environment" style="display:none" />
             </div>
 
             <div class="controls">
@@ -950,7 +952,7 @@
 
             const input = document.createElement('input');
             input.type = 'file';
-            input.accept = 'image/*';
+            input.accept = 'image/*'; // ギャラリー用（カメラは別ボタンで起動）
 
             input.onchange = function (e) {
                 console.log('ファイル選択:', e.target.files.length);
@@ -960,6 +962,29 @@
             };
 
             input.click();
+        }
+
+        // スマホカメラ起動（hidden input + capture=environment）
+        function openCamera() {
+            try {
+                const camInput = document.getElementById('cameraInput');
+                if (!camInput._bound) {
+                    camInput.addEventListener('change', (e) => {
+                        if (e.target.files && e.target.files[0]) {
+                            handleImageUpload(e.target.files[0]);
+                        }
+                    });
+                    camInput._bound = true;
+                }
+                // 一部端末向けに属性を再確認
+                camInput.setAttribute('accept', 'image/*;capture=camera');
+                camInput.setAttribute('capture', 'environment');
+                console.log('カメラ起動リクエスト（capture=environment）');
+                camInput.click();
+            } catch (e) {
+                console.warn('カメラ起動に失敗。代替としてギャラリーを開きます。', e);
+                selectImage();
+            }
         }
 
         // 画像アップロード処理
@@ -1141,36 +1166,20 @@
 
             console.log('クリック座標:', Math.round(x), Math.round(y));
 
-            // デバイス対応：ボールクリック領域調整
-            const isMobileClick = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
-            const clickRadius = isMobileClick ? 120 : 80; // スマホ120px、PC80px
-            let ballDetected = false;
-
-            // 既存のボール位置があれば、その近くをクリックしたかチェック
+            // 既存のボール位置の近接制限を撤廃：どこでも再設定可能に
             if (ballPosition) {
-                const ballX = ballPosition.x * canvas.clientWidth;
-                const ballY = ballPosition.y * canvas.clientHeight;
-                const distance = Math.sqrt(Math.pow(x - ballX, 2) + Math.pow(y - ballY, 2));
-
-                if (distance <= clickRadius) {
-                    console.log('既存ボール位置の近くをクリック (距離:', Math.round(distance), 'px)');
-                    ballDetected = true;
-                }
+                const prevX = ballPosition.x * canvas.clientWidth;
+                const prevY = ballPosition.y * canvas.clientHeight;
+                const distance = Math.sqrt(Math.pow(x - prevX, 2) + Math.pow(y - prevY, 2));
+                console.log('既存位置からの距離:', Math.round(distance), 'px -> 再設定します');
             }
 
-            // ボールが検出されるか、ボール位置が未設定の場合は新しい位置を設定
-            if (ballDetected || !ballPosition) {
-                // 正規化座標に変換
-                ballPosition = {
-                    x: x / canvas.clientWidth,
-                    y: y / canvas.clientHeight
-                };
-
-                console.log('ボール位置設定:', Math.round(ballPosition.x * 100) + '%, ' + Math.round(ballPosition.y * 100) + '%');
-            } else {
-                console.log('ボールから遠い位置をクリック - 無視');
-                return;
-            }
+            // 正規化座標に変換して常に更新
+            ballPosition = {
+                x: x / canvas.clientWidth,
+                y: y / canvas.clientHeight
+            };
+            console.log('ボール位置設定:', Math.round(ballPosition.x * 100) + '%, ' + Math.round(ballPosition.y * 100) + '%');
 
             // MediaPipeの結果があれば再描画してから赤い丸を描画
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
