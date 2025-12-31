@@ -819,8 +819,8 @@
                 <h3>📤 結果をシェア</h3>
                 <div class="social-buttons">
                     <button onclick="shareToTwitter()"
-                        style="background: #1DA1F2; color: white; border: none; padding: 12px 20px; border-radius: 25px; font-weight: bold; cursor: pointer;">
-                        🐦 Twitter
+                        style="background: #000; color: white; border: none; padding: 12px 20px; border-radius: 25px; font-weight: bold; cursor: pointer;">
+                        X（旧Twitter）
                     </button>
                     <button onclick="shareToFacebook()"
                         style="background: #4267B2; color: white; border: none; padding: 12px 20px; border-radius: 25px; font-weight: bold; cursor: pointer;">
@@ -924,6 +924,15 @@
                 </p>
             </div>
         </div>
+
+        <!-- カメラ撮影用の全画面オーバーレイ -->
+        <div id="cameraOverlay" style="display:none; position:fixed; inset:0; background:#000; z-index:100000;">
+            <video id="liveVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+            <div style="position:absolute; left:0; right:0; bottom:24px; display:flex; gap:12px; justify-content:center; align-items:center;">
+                <button id="cameraShutter" style="background:#fff; color:#000; border:none; width:68px; height:68px; border-radius:999px; font-weight:800; font-size:14px;">撮影</button>
+                <button id="cameraCancel" style="background:rgba(255,255,255,0.2); color:#fff; border:1px solid rgba(255,255,255,0.5); padding:12px 16px; border-radius:999px;">キャンセル</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -964,8 +973,26 @@
             input.click();
         }
 
-        // スマホカメラ起動（hidden input + capture=environment）
-        function openCamera() {
+        // スマホカメラ起動
+        // 1) getUserMedia によるアプリ内カメラ（優先）
+        // 2) フォールバック: hidden file input + capture=environment
+        let __cameraStream = null;
+        async function openCamera() {
+            const canUseMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            const isStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            const isiOSStandalone = !!(window.navigator.standalone);
+            const isMobileUA = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (window.innerWidth < 768);
+
+            if (canUseMedia && (isStandalone || isiOSStandalone || isMobileUA)) {
+                console.log('getUserMedia によるカメラ起動を試行');
+                try {
+                    await startInAppCamera();
+                    return;
+                } catch (err) {
+                    console.warn('getUserMedia 失敗。file input にフォールバックします。', err);
+                }
+            }
+
             try {
                 const camInput = document.getElementById('cameraInput');
                 if (!camInput._bound) {
@@ -976,15 +1003,73 @@
                     });
                     camInput._bound = true;
                 }
-                // 一部端末向けに属性を再確認
                 camInput.setAttribute('accept', 'image/*;capture=camera');
                 camInput.setAttribute('capture', 'environment');
-                console.log('カメラ起動リクエスト（capture=environment）');
+                console.log('カメラ起動リクエスト（capture=environment／フォールバック）');
                 camInput.click();
             } catch (e) {
                 console.warn('カメラ起動に失敗。代替としてギャラリーを開きます。', e);
                 selectImage();
             }
+        }
+
+        async function startInAppCamera() {
+            const overlay = document.getElementById('cameraOverlay');
+            const video = document.getElementById('liveVideo');
+            const shutter = document.getElementById('cameraShutter');
+            const cancel = document.getElementById('cameraCancel');
+
+            overlay.style.display = 'block';
+
+            // 背面カメラ優先
+            __cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+            video.srcObject = __cameraStream;
+
+            if (!video._bound) {
+                shutter.addEventListener('click', async () => {
+                    try {
+                        const file = await captureFromVideo(video);
+                        await stopInAppCamera();
+                        overlay.style.display = 'none';
+                        if (file) handleImageUpload(file);
+                    } catch (err) {
+                        console.error('撮影に失敗', err);
+                        alert('撮影に失敗しました。もう一度お試しください。');
+                    }
+                });
+                cancel.addEventListener('click', async () => {
+                    await stopInAppCamera();
+                    overlay.style.display = 'none';
+                });
+                video._bound = true;
+            }
+        }
+
+        async function stopInAppCamera() {
+            try {
+                if (__cameraStream) {
+                    __cameraStream.getTracks().forEach(t => t.stop());
+                }
+            } finally {
+                __cameraStream = null;
+            }
+        }
+
+        async function captureFromVideo(video) {
+            const w = video.videoWidth;
+            const h = video.videoHeight;
+            if (!w || !h) throw new Error('Video not ready');
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            const g = c.getContext('2d', { willReadFrequently: true });
+            g.drawImage(video, 0, 0, w, h);
+            return new Promise((resolve, reject) => {
+                c.toBlob((blob) => {
+                    if (!blob) return reject(new Error('Blob convert failed'));
+                    const file = new File([blob], 'camera.jpg', { type: 'image/jpeg' });
+                    resolve(file);
+                }, 'image/jpeg', 0.92);
+            });
         }
 
         // 画像アップロード処理
@@ -4110,7 +4195,7 @@
         // ソーシャルシェア機能
         function shareToTwitter() {
             const text = encodeURIComponent('ゴルフアドレス診断ツールで診断しました！ #ゴルフ #アドレス診断');
-            window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+            window.open(`https://x.com/intent/tweet?text=${text}`, '_blank');
         }
 
         function shareToFacebook() {
